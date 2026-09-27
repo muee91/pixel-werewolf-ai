@@ -1,0 +1,13 @@
+import { chromium } from '@playwright/test';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+await page.goto('http://localhost:3907', { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => localStorage.setItem('werewolf-appScreen', JSON.stringify('SETTINGS')));
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(2000);
+await page.screenshot({ path: '/tmp/icons-settings.png' });
+await page.evaluate(() => localStorage.setItem('werewolf-appScreen', JSON.stringify('GAME')));
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(3000);
+await page.screenshot({ path: '/tmp/icons-game.png' });
+await browser.close();

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AI狼人杀内测版</string>
+    <string name="title_activity_main">AI狼人杀内测版</string>
+    <string name="package_name">com.dayangbian.aiwerewolf</string>
+    <string name="custom_url_scheme">com.dayangbian.aiwerewolf</string>
+</resources>

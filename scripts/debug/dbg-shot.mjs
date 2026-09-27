@@ -1,0 +1,16 @@
+import { chromium } from '@playwright/test';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+const errors = [];
+page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });
+page.on('pageerror', e => errors.push('PAGEERROR: ' + String(e).slice(0, 300)));
+await page.goto('http://localhost:3907', { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => localStorage.setItem('werewolf-appScreen', JSON.stringify('SETTINGS')));
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(3000);
+console.log('URL:', page.url());
+console.log('BODY:', (await page.locator('body').innerText()).slice(0, 400).replace(/\n+/g, ' | '));
+console.log('BUTTONS:', await page.locator('button').allInnerTexts().then(a => a.slice(0, 30).join(' / ')));
+console.log('ERRORS:', errors.slice(0, 5).join(' ;; ') || 'none');
+await page.screenshot({ path: '/tmp/dbg-home.png' });
+await browser.close();

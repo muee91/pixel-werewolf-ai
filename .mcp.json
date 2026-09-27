@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "werewolf": {
+      "command": "node",
+      "args": ["mcp/werewolf-mcp.mjs"],
+      "env": {
+        "WEREWOLF_ROOM_HOST": "http://localhost:3002"
+      }
+    }
+  }
+}

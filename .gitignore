@@ -1,0 +1,56 @@
+
+!.vscode/extensions.json
+# Android build artifacts
+# Editor directories and files
+# Environment variables
+# Logs
+# Test / debug artifacts
+*.local
+*.log
+*.njsproj
+*.ntvs*
+*.pyc
+*.sln
+*.suo
+*.sw?
+.DS_Store
+.codex-write-check
+.env
+.env.local
+.idea
+.mimocode/
+.playwright-cli/
+.runtime/
+.superpowers/
+.trae/
+.zcode/
+.v2c/
+.video_agent/
+.venv/
+.vscode/*
+__pycache__/
+after-9.yaml
+android/.gradle/
+android/app/build/
+android/build/
+android/capacitor-cordova-android-plugins/
+android/local.properties
+build/icon.iconset/
+dist
+dist-electron/
+dist-ssr
+lerna-debug.log*
+logs
+node_modules
+npm-debug.log*
+output/
+playwright-report/
+pnpm-debug.log*
+release/
+server/config-share.json
+server/venv-edge/
+server/venv/
+test-results/
+venv/
+yarn-debug.log*
+yarn-error.log*

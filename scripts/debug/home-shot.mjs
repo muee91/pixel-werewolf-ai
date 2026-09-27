@@ -1,0 +1,12 @@
+import { chromium } from '@playwright/test';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+const errors = [];
+page.on('pageerror', e => errors.push(String(e).slice(0, 200)));
+await page.goto('http://localhost:3907', { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => { localStorage.removeItem('werewolf-appScreen'); });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(2500);
+await page.screenshot({ path: '/tmp/home-check.png' });
+console.log('ERRORS:', errors.join(' ;; ') || 'none');
+await browser.close();

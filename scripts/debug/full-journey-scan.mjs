@@ -1,0 +1,20 @@
+// 零配置完整用户旅程错误扫描
+import { chromium } from '@playwright/test';
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const errors = [];
+page.on('pageerror', e => errors.push('PAGE: ' + String(e).slice(0, 300)));
+page.on('console', m => { if (m.type() === 'error') errors.push('CONSOLE: ' + m.text().slice(0, 200)); });
+await page.goto('http://127.0.0.1:3001', { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => localStorage.clear());
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(2500);
+await page.getByText('经典标准局', { exact: false }).first().click();
+await page.getByTestId('ignite-campfire-button').click();
+await page.waitForTimeout(20000);
+const body = await page.locator('body').innerText();
+await page.screenshot({ path: '/tmp/journey.png' });
+console.log('对局推进:', /天黑|天亮|讨论|发言|行动/.test(body) ? 'YES' : 'NO');
+console.log('=== 全部错误 ===');
+console.log(errors.slice(0, 10).join('\n') || 'none');
+await browser.close();
