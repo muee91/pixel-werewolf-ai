@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAtom, useSetAtom, useAtomValue, useStore, getDefaultStore } from 'jotai';
-import { appScreenAtom, multiplayerStateAtom, multiplayerRoleAtom, aiHostedPlayersAtom, multiplayerConnectionAtom, playersAtom, multiplayerPingAtom, gamePhaseAtom, turnCountAtom, gameConfigAtom, godStateAtom, logsAtom, lastSavedArchiveAtom, gameArchivesAtom, guestRoleInfoAtom, isPausedAtom, isAutoPlayAtom, addToastAtom } from '../atoms';
+import { appScreenAtom, multiplayerStateAtom, multiplayerRoleAtom, aiHostedPlayersAtom, multiplayerConnectionAtom, playersAtom, multiplayerPingAtom, gamePhaseAtom, lastSavedArchiveAtom, gameArchivesAtom, guestRoleInfoAtom, isPausedAtom, isAutoPlayAtom, addToastAtom } from '../atoms';
 import { GamePhase } from '../types';
 import { startMultiplayerGameAtom, setupMultiplayerGameAtom, exitGameAtom, toggleAIHostingAtom, hostExitGameAtom, applyGameStateAtom, applyHostGameStateAtom, actionAckStateAtom } from '../store';
 import { MultiplayerLobby } from './MultiplayerLobby';
@@ -9,24 +9,25 @@ import { RoomState, SseEvent } from './types';
 import { setWsSend } from './wsClient';
 import { setHostBroadcastWsSend } from './useHostBroadcast';
 import { getRoomHttpBase, getRoomWsBase } from './endpoints';
-import { evaluateGameStateSync } from './protocol';
+import { evaluateGameStateSync, getGuestSilenceMs, getUnstableGuests } from './protocol';
 import { useHostBroadcast } from './useHostBroadcast';
 import { usePingTracker } from './usePingTracker';
 import { useGameEngine } from '../hooks/useGameEngine';
 import GameRoomView from '../components/GameRoomView';
 import { DEFAULT_DISCONNECT_GRACE_MS, isTerminalWsCloseCode } from './constants';
+import { showToast } from '../utils/notify';
 
 const GuestDisconnectModal: React.FC<{
     nickname: string;
     timeLeft: number;
     onReconnect: () => void;
     onTimeout: () => void;
-}> = ({ nickname, timeLeft, onReconnect, onTimeout }) => {
+}> = ({ timeLeft, onReconnect, onTimeout }) => {
     return (
-        <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-[var(--voxel-paper)] rounded-none shadow-[3px_3px_0_var(--voxel-ink)] max-w-sm w-full overflow-hidden">
+        <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4">
+            <div className="bg-[var(--voxel-paper)] rounded-none border-[3px] border-[var(--voxel-ink)] shadow-[3px_3px_0_var(--voxel-ink)] max-w-sm w-full overflow-hidden">
                 <div className="p-6 text-center">
-                    <div className="w-16 h-16 mx-auto mb-4 bg-[var(--voxel-torch)]/15 flex items-center justify-center rounded-none">
+                    <div className="w-16 h-16 mx-auto mb-4 bg-[rgba(246,180,67,0.15)] flex items-center justify-center rounded-none">
                         <svg className="w-8 h-8 text-[var(--voxel-ink)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636a9 9 0 11-12.728 0m12.728 0L12 12m6.364 6.364a9 9 0 01-12.728 0M12 12v6" />
                         </svg>
@@ -44,13 +45,13 @@ const GuestDisconnectModal: React.FC<{
                 <div className="border-t border-th-border p-4 flex gap-3">
                     <button
                         onClick={onReconnect}
-                        className="flex-1 py-2.5 bg-[var(--voxel-torch)] text-[var(--voxel-ink)] rounded-none border-[2px] border-[var(--voxel-ink)] font-semibold hover:bg-[var(--voxel-torch)] transition-colors"
+                        className="flex-1 py-2.5 bg-[var(--voxel-torch)] text-[var(--voxel-ink)] rounded-none border-[2px] border-[var(--voxel-ink)] font-semibold hover:brightness-110 transition-all"
                     >
                         尝试重连
                     </button>
                     <button
                         onClick={onTimeout}
-                        className="flex-1 py-2.5 bg-[var(--voxel-wood)] text-[var(--voxel-paper)] rounded-none font-semibold hover:bg-[var(--voxel-wood)] transition-colors"
+                        className="flex-1 py-2.5 bg-[var(--voxel-wood-dark)] text-[var(--voxel-paper)] rounded-none border-[2px] border-[var(--voxel-ink)] font-semibold hover:brightness-110 transition-all"
                     >
                         返回主页
                     </button>
@@ -64,10 +65,11 @@ const HostPlayerDisconnectModal: React.FC<{
     nickname: string;
     seatNumber: number;
     isHosting: boolean;
+    timeLeft: number;
     onEnableHosting: () => void;
     onDisableHosting: () => void;
     onDismiss: () => void;
-}> = ({ nickname, seatNumber, isHosting, onEnableHosting, onDisableHosting, onDismiss }) => {
+}> = ({ nickname, seatNumber, isHosting, timeLeft, onEnableHosting, onDisableHosting, onDismiss }) => {
     return (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] max-w-sm w-full mx-4">
             <div className="bg-[var(--voxel-paper)] rounded-none shadow-[3px_3px_0_var(--voxel-ink)] border-[3px] border-[var(--voxel-ink)] overflow-hidden">
@@ -85,6 +87,10 @@ const HostPlayerDisconnectModal: React.FC<{
                             ) : (
                                 <div className="text-xs text-[var(--voxel-ink-soft)] mt-0.5">等待重连或开启托管</div>
                             )}
+                            {/* 宽限剩余时间来自服务端下发的 disconnectGraceMs：这段时间内座位不会被移出房间 */}
+                            <div className="text-xs text-[var(--voxel-ink-soft)] mt-0.5">
+                                重连宽限剩余 {Math.max(0, Math.ceil(timeLeft / 1000))}s
+                            </div>
                         </div>
                         <button onClick={onDismiss} className="text-[var(--voxel-paper-dim)] hover:text-[var(--voxel-ink)] shrink-0">
                             <svg className="w-5 h-5 text-[var(--voxel-ink)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -95,7 +101,7 @@ const HostPlayerDisconnectModal: React.FC<{
                     {!isHosting && (
                         <button
                             onClick={onEnableHosting}
-                            className="mt-3 w-full py-2 bg-[var(--voxel-torch)] text-[var(--voxel-ink)] rounded-none border-[2px] border-[var(--voxel-ink)] text-sm font-semibold hover:bg-[var(--voxel-torch)] transition-colors"
+                            className="mt-3 w-full py-2 bg-[var(--voxel-torch)] text-[var(--voxel-ink)] rounded-none border-[2px] border-[var(--voxel-ink)] text-sm font-semibold hover:brightness-110 transition-all"
                         >
                             开启 AI 托管
                         </button>
@@ -103,7 +109,7 @@ const HostPlayerDisconnectModal: React.FC<{
                     {isHosting && (
                         <button
                             onClick={onDisableHosting}
-                            className="mt-3 w-full py-2 bg-[var(--voxel-torch)] text-[var(--voxel-ink)] rounded-none border-[2px] border-[var(--voxel-ink)] text-sm font-semibold hover:bg-[var(--voxel-torch)] transition-colors"
+                            className="mt-3 w-full py-2 bg-[var(--voxel-torch)] text-[var(--voxel-ink)] rounded-none border-[2px] border-[var(--voxel-ink)] text-sm font-semibold hover:brightness-110 transition-all"
                         >
                             关闭托管
                         </button>
@@ -175,10 +181,10 @@ const AIHostingModal: React.FC<{
                                 </div>
                                 <button
                                     onClick={() => onToggleHosting(dp.seatNumber, !aiHostedSeats.has(dp.seatNumber))}
-                                    className={`px-3 py-1.5 rounded-none border-[2px] border-[var(--voxel-ink)] text-sm font-semibold transition-colors ${
+                                    className={`px-3 py-1.5 rounded-none border-[2px] border-[var(--voxel-ink)] text-sm font-semibold transition-all hover:brightness-110 ${
                                         aiHostedSeats.has(dp.seatNumber)
-                                            ? 'bg-[var(--voxel-redstone)] text-[var(--voxel-paper)] hover:bg-[var(--voxel-redstone)]'
-                                            : 'bg-[var(--voxel-torch)] text-[var(--voxel-ink)] hover:bg-[var(--voxel-torch)]'
+                                            ? 'bg-[var(--voxel-redstone)] text-[var(--voxel-solid-white)]'
+                                            : 'bg-[var(--voxel-torch)] text-[var(--voxel-ink)]'
                                     }`}
                                 >
                                     {aiHostedSeats.has(dp.seatNumber) ? '关闭托管' : '开启托管'}
@@ -201,7 +207,7 @@ const AIHostingModal: React.FC<{
 };
 
 export const MultiplayerView: React.FC = () => {
-    const [appScreen, setAppScreen] = useAtom(appScreenAtom);
+    const [, setAppScreen] = useAtom(appScreenAtom);
     const [multiplayerState, setMultiplayerState] = useAtom(multiplayerStateAtom);
     const [currentRoom, setCurrentRoom] = useState<RoomState | null>(null);
     const lastRoomJsonRef = useRef<string>('');
@@ -230,8 +236,7 @@ export const MultiplayerView: React.FC = () => {
     const gamePhase = useAtomValue(gamePhaseAtom);
     const multiplayerRoleRef = useRef(multiplayerRole);
     multiplayerRoleRef.current = multiplayerRole;
-    const players = useAtomValue(playersAtom);
-    const [playerPings, setMultiplayerPing] = useAtom(multiplayerPingAtom);
+    const [, setMultiplayerPing] = useAtom(multiplayerPingAtom);
 
     const [showHostExitModal, setShowHostExitModal] = useState(false);
     const [showAIHostingModal, setShowAIHostingModal] = useState(false);
@@ -244,6 +249,20 @@ export const MultiplayerView: React.FC = () => {
     const setMultiplayerConnection = useSetAtom(multiplayerConnectionAtom);
     const disconnectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [disconnectTimeLeft, setDisconnectTimeLeft] = useState(DEFAULT_DISCONNECT_GRACE_MS);
+
+    // 房主侧「连接不稳」提示（纯可见性）：服务端每次翻转标记都会把房间状态推过来，
+    // 所以只在 currentRoom 变化时重算，不加计时器，免得对局画面空转重渲染。
+    const unstableGuests = useMemo(() => (
+        multiplayerState.isHost && currentRoom
+            ? getUnstableGuests(
+                currentRoom.players,
+                currentRoom.hostPlayerId,
+                Date.now(),
+                connectionState.reconnectTimeout || DEFAULT_DISCONNECT_GRACE_MS,
+            )
+            : []
+    ), [multiplayerState.isHost, currentRoom, connectionState.reconnectTimeout]);
+    const unstableGuestIds = useMemo(() => new Set(unstableGuests.map(player => player.playerId)), [unstableGuests]);
 
     const lastSavedArchive = useAtomValue(lastSavedArchiveAtom);
     const setGameArchives = useSetAtom(gameArchivesAtom);
@@ -274,7 +293,7 @@ export const MultiplayerView: React.FC = () => {
     const resolveHumanInputRef = useRef(resolveHumanInput);
     resolveHumanInputRef.current = resolveHumanInput;
 
-    const { syncState } = useHostBroadcast(
+    useHostBroadcast(
         multiplayerState.roomId || '',
         multiplayerState.playerId || ''
     );
@@ -551,13 +570,13 @@ export const MultiplayerView: React.FC = () => {
         } else if (data.type === 'HOST_LEFT') {
             const hl = data as SseEvent & { reason: string };
             intentionalCloseRef.current = true;
-            alert(`对局已取消：${hl.reason}`);
+            showToast(`对局已取消：${hl.reason}`, 'warning');
             if (wsRef.current) wsRef.current.close();
             exitGame();
         } else if (data.type === 'PLAYER_KICKED') {
             const pk = data as SseEvent & { reason: string };
             intentionalCloseRef.current = true;
-            alert(`你已被踢出：${pk.reason}`);
+            showToast(`你已被踢出：${pk.reason}`, 'warning');
             if (wsRef.current) wsRef.current.close();
             exitGame();
         } else if (data.type === 'YOUR_ROLE') {
@@ -579,9 +598,18 @@ export const MultiplayerView: React.FC = () => {
                 const s = getDefaultStore();
                 s.set(actionAckStateAtom, { pending: false, actionType: ack.actionType, success: ack.success, timestamp: Date.now() });
                 if (!ack.success) {
-                    alert('行动没有送达房主，请检查连接后重试。');
+                    showToast('行动没有送达房主，请检查连接后重试。', 'error');
                 }
             }
+        } else if (data.type === 'MESSAGE_TOO_LARGE') {
+            // 服务端丢掉了这条消息（超过单条上限），必须让玩家知道操作没送出
+            const tooLarge = data as Extract<SseEvent, { type: 'MESSAGE_TOO_LARGE' }>;
+            const limitMb = Math.max(1, Math.round(tooLarge.limitBytes / (1024 * 1024)));
+            getDefaultStore().set(
+                addToastAtom,
+                `这条操作超过 ${limitMb}MB 没有送出去（${tooLarge.receivedBytes} 字节），请把发言缩短后重试`,
+                'error',
+            );
         } else if (data.type === 'GAME_PAUSED') {
             if (multiplayerRoleRef.current === 'guest') {
                 const s = getDefaultStore();
@@ -687,7 +715,7 @@ export const MultiplayerView: React.FC = () => {
             if (multiplayerStateRef.current.status === 'LOBBY') return;
             if (isTerminalWsCloseCode(event.code)) {
                 intentionalCloseRef.current = true;
-                alert('房间不存在或登录凭证已失效，请重新加入房间。');
+                showToast('房间不存在或登录凭证已失效，请重新加入房间。', 'error');
                 resetToLobbyRef.current();
                 return;
             }
@@ -822,7 +850,7 @@ export const MultiplayerView: React.FC = () => {
             && !currentRoom
             && !handleEnterRoomRef.current;
 
-        if (shouldReconnectRoom) {
+        if (shouldReconnectRoom && multiplayerState.roomId && multiplayerState.playerId && multiplayerState.sessionToken) {
             handleEnterRoomRef.current = true;
             handleEnterRoom(multiplayerState.roomId, multiplayerState.playerId, multiplayerState.nickname || '', multiplayerState.sessionToken);
         }
@@ -856,7 +884,7 @@ export const MultiplayerView: React.FC = () => {
             window.removeEventListener('multiplayer-host-exit', onHostExit);
             window.removeEventListener('multiplayer-guest-exit', onGuestExit);
         };
-    }, [resetToLobby]);
+    }, [resetToLobby, exitGame]);
 
     const handleHostExit = useCallback(async () => {
         setShowHostExitModal(false);
@@ -899,6 +927,26 @@ export const MultiplayerView: React.FC = () => {
                         AI 托管管理 ({disconnectedPlayers.length})
                     </button>
                 )}
+                {/* 客人静默已超过宽限期的一半、但还没走到断线：先给房主一个克制的提示，
+                    这段时间不改变任何对局推进（座位仍在宽限期内，引擎逻辑不受影响） */}
+                {multiplayerRole === 'host' && unstableGuests.length > 0 && (
+                    <div
+                        role="status"
+                        className="fixed right-4 top-28 z-[69] max-w-[15rem] border-[3px] border-[var(--voxel-ink)] bg-[var(--voxel-paper)] px-3 py-2 shadow-[3px_3px_0_var(--voxel-ink)]"
+                    >
+                        <div className="text-xs font-bold text-[var(--voxel-ink)]">连接不稳</div>
+                        {unstableGuests.map(player => {
+                            const silenceMs = getGuestSilenceMs(player, Date.now());
+                            return (
+                                <div key={player.playerId} className="text-xs text-[var(--voxel-ink-soft)]">
+                                    {player.seatNumber}号 {player.nickname}
+                                    {silenceMs !== null && ` · 静默 ${Math.floor(silenceMs / 1000)}s`}
+                                </div>
+                            );
+                        })}
+                        <div className="mt-1 text-[10px] text-[var(--voxel-ink-soft)] opacity-70">可能已离线，仍在宽限期内等待重连</div>
+                    </div>
+                )}
                 {showHostExitModal && (
                     <HostExitModal
                         onConfirm={handleHostExit}
@@ -919,6 +967,7 @@ export const MultiplayerView: React.FC = () => {
                             nickname={disconnectedPlayer.nickname}
                             seatNumber={disconnectedPlayers.find(p => p.nickname === disconnectedPlayer.nickname)?.seatNumber ?? 0}
                             isHosting={disconnectedPlayers.some(dp => !!aiHostedPlayers[dp.seatNumber] && dp.nickname === disconnectedPlayer.nickname)}
+                            timeLeft={disconnectTimeLeft}
                             onEnableHosting={() => {
                                 const dp = disconnectedPlayers.find(p => p.nickname === disconnectedPlayer.nickname);
                                 if (dp) toggleAIHosting({ seatNumber: dp.seatNumber, enabled: true });
@@ -965,6 +1014,7 @@ export const MultiplayerView: React.FC = () => {
                     room={currentRoom}
                     playerId={multiplayerState.playerId}
                     nickname={multiplayerState.nickname || ''}
+                    unstablePlayerIds={unstableGuestIds}
                     onBack={resetToLobby}
                 />
                 {reconnecting && (
@@ -1036,6 +1086,7 @@ export const MultiplayerView: React.FC = () => {
                         nickname={disconnectedPlayer.nickname}
                         seatNumber={disconnectedPlayers.find(p => p.nickname === disconnectedPlayer.nickname)?.seatNumber ?? 0}
                         isHosting={disconnectedPlayers.some(dp => !!aiHostedPlayers[dp.seatNumber] && dp.nickname === disconnectedPlayer.nickname)}
+                        timeLeft={disconnectTimeLeft}
                         onEnableHosting={() => {
                             const dp = disconnectedPlayers.find(p => p.nickname === disconnectedPlayer.nickname);
                             if (dp) toggleAIHosting({ seatNumber: dp.seatNumber, enabled: true });

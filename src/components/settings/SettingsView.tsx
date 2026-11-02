@@ -1,15 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { appScreenAtom, gameArchivesLoadableAtom, llmPresetsAtom, llmProvidersAtom, ttsPresetsAtom, actorProfilesAtom } from '../../store';
-import { uiConfigAtom } from '../../atoms';
-import { THEMES } from '../../themes/index';
+import { appScreenAtom, gameArchivesLoadableAtom, llmPresetsAtom, ttsPresetsAtom } from '../../store';
 import { PixelIcon, type PixelIconName } from '../game/voxel/primitives';
-import { OverviewBadge, SectionStat } from '../ui/pixel';
+import { OverviewBadge } from '../ui/pixel';
 import { SECTIONS, SECTION_DETAILS } from './constants';
 import type { SectionId, SubPage } from './constants';
 import { useModelReadiness } from './useModelReadiness';
 import { useSettingsImportExport } from './useSettingsImportExport';
 import { AppearanceSection } from './sections/AppearanceSection';
+import { SoundSection } from './sections/SoundSection';
 import { GameSection } from './sections/GameSection';
 import { ModelSection } from './sections/ModelSection';
 import { PlayersSection } from './sections/PlayersSection';
@@ -38,11 +37,8 @@ const SettingsView = () => {
 
     const contentRef = useRef<HTMLDivElement>(null);
 
-    const uiConfig = useAtomValue(uiConfigAtom);
-    const llmProviders = useAtomValue(llmProvidersAtom);
     const llmPresets = useAtomValue(llmPresetsAtom);
     const ttsPresets = useAtomValue(ttsPresetsAtom);
-    const actors = useAtomValue(actorProfilesAtom);
     const archivesLoadable = useAtomValue(gameArchivesLoadableAtom);
     const archives = archivesLoadable.state === 'hasData' ? archivesLoadable.data : [];
 
@@ -65,16 +61,16 @@ const SettingsView = () => {
         }
         switch (activeSection) {
             case 'appearance': return <AppearanceSection modelReady={readiness.modelReady} />;
+            case 'sound': return <SoundSection setSubPage={setSubPage} />;
             case 'game': return <GameSection />;
-            case 'model': return <ModelSection setSubPage={setSubPage} io={io} readiness={readiness} />;
-            case 'players': return <PlayersSection setSubPage={setSubPage} io={io} />;
+            case 'model': return <ModelSection setSubPage={setSubPage} readiness={readiness} />;
+            case 'players': return <PlayersSection setSubPage={setSubPage} />;
             case 'advanced': return <AdvancedSection io={io} />;
         }
     };
 
     const activeSectionDetail = SECTION_DETAILS[activeSection];
     const activeSectionIcon = SECTIONS.find(section => section.id === activeSection)?.icon || 'wrench';
-    const isDetailView = !!subPage;
     const detailTitle = subPage?.type === 'PROVIDER_EDIT'
         ? '供应商详情'
         : subPage?.type === 'LLM_EDIT'
@@ -82,7 +78,7 @@ const SettingsView = () => {
             : subPage?.type === 'TTS_EDIT'
                 ? 'TTS 引擎详情'
                 : subPage?.type === 'ACTOR_EDIT'
-                    ? '角色配置'
+                    ? '分身配置'
                     : activeSectionDetail.title;
     const detailDescription = subPage
         ? '当前正在编辑具体配置项，修改会即时保存在本地。'
@@ -95,25 +91,27 @@ const SettingsView = () => {
                 <div className="p-5 border-b-[3px]" style={{ borderColor: 'var(--color-border)' }}>
                     <div className="flex items-start justify-between gap-3">
                         <div>
-                            <div className="text-[11px] font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--color-muted)' }}>控制台</div>
+                            <div className="text-xs font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--color-muted)' }}>控制台</div>
                             <div className="mt-2 text-lg font-black" style={{ color: 'var(--color-fg)' }}>设置中心</div>
-                            <div className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>把外观、规则、模型和角色配置收在同一条操作链里。</div>
+                            <div className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>把外观、规则、模型和分身配置收在同一条操作链里。</div>
                         </div>
                         <button onClick={() => setScreen('HOME')}
-                            className="shrink-0 rounded-none border px-3 py-2 text-xs font-bold"
-                            style={{ borderColor: 'var(--color-border)', background: 'var(--voxel-wood)', color: 'var(--color-accent1)' }}>
+                            className="flex min-h-10 shrink-0 items-center gap-1 rounded-none border-[3px] py-1.5 pl-1.5 pr-2.5 text-xs font-black"
+                            style={{ borderColor: 'var(--voxel-ink)', background: 'var(--voxel-paper)', color: 'var(--voxel-ink)' }}>
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
                             返回
                         </button>
                     </div>
                 </div>
 
-                <div className="flex-1 px-3 py-3 space-y-1.5">
+                <div className="flex-1 min-h-0 px-3 py-3 space-y-1.5 overflow-y-auto custom-scrollbar">
                     {SECTIONS.map(section => (
                         <button key={section.id}
+                            data-testid={`settings-section-${section.id}`}
                             onClick={() => { setActiveSection(section.id); setSubPage(null); }}
                             className="w-full flex items-center gap-3 px-3 py-3 text-sm font-extrabold transition-all text-left"
                             style={{
-                                background: activeSection === section.id && !subPage ? 'var(--voxel-wood)' : 'transparent',
+                                background: activeSection === section.id && !subPage ? 'var(--color-card)' : 'transparent',
                                 color: activeSection === section.id && !subPage ? 'var(--color-fg)' : 'var(--color-muted)',
                                 border: activeSection === section.id && !subPage ? '3px solid var(--color-accent1)' : '3px solid transparent',
                                 boxShadow: activeSection === section.id && !subPage ? '3px 3px 0 var(--color-border)' : 'none',
@@ -121,17 +119,14 @@ const SettingsView = () => {
                             <span className="shrink-0"><PixelIcon name={section.icon} px={3} /></span>
                             <div className="min-w-0">
                                 <div className="font-bold">{section.label}</div>
-                                <div className="text-[10px] mt-0.5 opacity-80">
+                                {/* text-balance:不做处理时 180px 宽会把「视角、首页风格、布局与特效。」压成
+                                    11 字 + 一个孤零零的「效。」。均衡换行宁可两行也不要孤字。 */}
+                                <div className="mt-0.5 text-[11px] leading-snug text-balance opacity-80">
                                     {SECTION_DETAILS[section.id].description}
                                 </div>
                             </div>
                         </button>
                     ))}
-                </div>
-
-                <div className="p-4 border-t-[3px] grid grid-cols-2 gap-2" style={{ borderColor: 'var(--color-border)' }}>
-                    <SectionStat label="供应商" value={`${llmProviders.length}`} />
-                    <SectionStat label="玩家" value={`${Math.max(0, actors.length - 1)}`} />
                 </div>
             </div>
 
@@ -140,46 +135,53 @@ const SettingsView = () => {
                     style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)' }}>
                     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4">
                         <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                    <span className="inline-block align-middle"><PixelIcon name={activeSectionIcon as PixelIconName} px={3} /></span>
-                                    <span className="text-[11px] font-bold uppercase tracking-[0.22em]" style={{ color: 'var(--color-muted)' }}>
-                                        {isDetailView ? '细项' : '分组'}
-                                    </span>
+                                <div className="min-w-0">
+                                    <h1 className="flex items-center gap-2 text-xl font-black sm:text-2xl" style={{ color: 'var(--color-fg)' }}>
+                                        <span className="inline-block shrink-0 align-middle"><PixelIcon name={activeSectionIcon as PixelIconName} px={3} /></span>
+                                        {detailTitle}
+                                    </h1>
+                                    <p className="mt-1 text-xs sm:text-sm max-w-2xl" style={{ color: 'var(--color-muted)' }}>{detailDescription}</p>
                                 </div>
-                                <h1 className="mt-2 text-xl sm:text-2xl font-black" style={{ color: 'var(--color-fg)' }}>{detailTitle}</h1>
-                                <p className="mt-1 text-xs sm:text-sm max-w-2xl" style={{ color: 'var(--color-muted)' }}>{detailDescription}</p>
-                            </div>
                             <button onClick={() => setScreen('HOME')}
-                                className="lg:hidden shrink-0 rounded-none border px-3 py-2 text-xs font-bold"
-                                style={{ borderColor: 'var(--color-border)', background: 'var(--voxel-wood)', color: 'var(--color-accent1)' }}>
+                                className="flex min-h-10 shrink-0 items-center gap-1 rounded-none border-[3px] py-1.5 pl-1.5 pr-2.5 text-xs font-black lg:hidden"
+                                style={{ borderColor: 'var(--voxel-ink)', background: 'var(--voxel-paper)', color: 'var(--voxel-ink)' }}>
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
                                 返回
                             </button>
                         </div>
 
-                        <div className="mt-3 grid grid-cols-4 gap-2">
-                            <OverviewBadge label="主题" value={THEMES[uiConfig.themeId].label} />
-                            <OverviewBadge label="模型" value={`${llmPresets.length}`} />
-                            <OverviewBadge label="TTS" value={`${ttsPresets.length}`} />
-                            <OverviewBadge label="存档" value={`${archives.length}`} />
+                        {/* 三个能跳的总览入口。主题徽章原先和下方外观选择器完全重复，已删除。 */}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <div className="min-w-[calc(50%-0.25rem)] flex-1 lg:min-w-0" data-testid="overview-model">
+                                <OverviewBadge label="模型" value={`${llmPresets.length} 个 ›`} onClick={() => { setActiveSection('model'); setSubPage(null); }} />
+                            </div>
+                            <div className="min-w-[calc(50%-0.25rem)] flex-1 lg:min-w-0" data-testid="overview-tts">
+                                <OverviewBadge label="TTS" value={`${ttsPresets.length} 个 ›`} onClick={() => { setActiveSection('sound'); setSubPage(null); }} />
+                            </div>
+                            <div className="min-w-[calc(50%-0.25rem)] flex-1 lg:min-w-0" data-testid="overview-archives">
+                                <OverviewBadge label="存档" value={`${archives.length} 局 ›`} onClick={() => setScreen('HISTORY')} />
+                            </div>
                         </div>
 
-                        <div className="mt-4 lg:hidden -mx-1 overflow-x-auto">
-                            <div className="flex gap-2 px-1 min-w-max">
-                                {SECTIONS.map(section => (
-                                    <button
-                                        key={section.id}
-                                        onClick={() => { setActiveSection(section.id); setSubPage(null); }}
-                                        className="rounded-none border px-3 py-2 text-xs font-bold whitespace-nowrap transition-all"
-                                        style={{
-                                            borderColor: activeSection === section.id && !subPage ? 'var(--color-accent1)' : 'var(--color-border)',
-                                            background: activeSection === section.id && !subPage ? 'var(--color-accent1)' : 'var(--voxel-wood)',
-                                            color: activeSection === section.id && !subPage ? '#fff' : 'var(--color-fg)',
-                                        }}
-                                    >
-                                        <PixelIcon name={section.icon} px={2} /> {section.label}
-                                    </button>
-                                ))}
+                        <div className="mt-4 lg:hidden settings-tab-edge">
+                            <div className="-mx-1 overflow-x-auto overscroll-x-contain settings-tab-scroll">
+                                <div className="flex gap-2 px-1 pb-1.5 min-w-max">
+                                    {SECTIONS.map(section => (
+                                        <button
+                                            key={section.id}
+                                            onClick={() => { setActiveSection(section.id); setSubPage(null); }}
+                                            className="flex min-h-10 shrink-0 items-center gap-1 rounded-none border px-3 py-2 text-xs font-bold whitespace-nowrap transition-all"
+                                            style={{
+                                                borderColor: activeSection === section.id && !subPage ? 'var(--color-accent1)' : 'var(--color-border)',
+                                                background: activeSection === section.id && !subPage ? 'var(--color-accent1)' : 'var(--color-card)',
+                                                // 激活态是火把金底:字用墨色(白字只有 1.8:1)
+                                                color: activeSection === section.id && !subPage ? 'var(--voxel-ink)' : 'var(--color-fg)',
+                                            }}
+                                        >
+                                            <PixelIcon name={section.icon} px={2} /> {section.label}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </div>

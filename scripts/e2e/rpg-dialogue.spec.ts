@@ -43,7 +43,8 @@ test('visible player speech uses the RPG dialogue overlay in 3D', async ({ page 
     await page.goto('/');
     await page.getByRole('button', { name: '旁观生存' }).click();
     await page.getByRole('button', { name: '点燃营火' }).click();
-    await expect(page.getByTestId('voxel-rpg-canvas')).toBeVisible({ timeout: 20_000 }); // 世界生成可达 5-10s
+    // 3D 场景是 946KB 的懒加载 chunk：机器有负载时首帧可能要 30s 以上（实测同机并发跑套件时 20s 不够）
+    await expect(page.getByTestId('voxel-rpg-canvas')).toBeVisible({ timeout: 45_000 });
     await page.waitForTimeout(1_200);
     await page.screenshot({ path: 'output/playwright/rpg-valley-overview.png' });
 
@@ -63,10 +64,14 @@ test('visible player speech uses the RPG dialogue overlay in 3D', async ({ page 
 
     await page.screenshot({ path: 'output/playwright/rpg-dialogue-desktop.png' });
 
-    // 移动端:等下一条对话出现再量尺寸(发言是串行循环的,必然再出现)
-    await expect(dialogue).toBeVisible({ timeout: 30_000 });
-    const dialogueBox = await dialogue.boundingBox();
-    expect(dialogueBox).not.toBeNull();
+    // 移动端:等下一条对话出现再量尺寸(发言是串行循环的,必然再出现)。
+    // 注意不能先 toBeVisible 再 boundingBox：两条语句之间对话可能已经切走，
+    // 量到的会是 null（本用例曾因此偶发失败）。把"可见 + 量到盒子"放进同一个轮询里。
+    let dialogueBox: { width: number; height: number } | null = null;
+    await expect.poll(async () => {
+        dialogueBox = (await dialogue.isVisible()) ? await dialogue.boundingBox() : null;
+        return dialogueBox;
+    }, { timeout: 30_000, intervals: [300, 600] }).not.toBeNull();
     expect(dialogueBox!.width).toBeGreaterThan(340);
     expect(dialogueBox!.height).toBeLessThan(360);
     await page.screenshot({ path: 'output/playwright/rpg-dialogue-mobile.png' });

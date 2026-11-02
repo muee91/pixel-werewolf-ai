@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { SCENES } from '../../src/components/game/voxel3d/biomes';
 import {
   buildSeatPlacements,
   buildVisibleAvatarDescriptor,
@@ -8,6 +9,7 @@ import {
   getCameraFocusTarget,
   getOverviewCameraPose,
 } from '../../src/components/game/voxel3d/sceneModel';
+import type { AvatarLook } from '../../src/utils/avatarLook';
 
 // ── helpers ──────────────────────────────────────────────
 
@@ -21,6 +23,8 @@ interface VisiblePlayer {
   isHuman?: boolean;
   concealed?: boolean;
   hideLabel?: boolean;
+  modelLabel?: string;
+  look?: AvatarLook;
 }
 
 const makePlayer = (
@@ -178,6 +182,40 @@ test('descriptor preserves only explicit concealment flags', () => {
   assert.ok(!('role' in desc));
 });
 
+test('混用模型时名片把模型名带到 3D 名牌上', () => {
+  const desc = buildVisibleAvatarDescriptor(
+    makePlayer(10, { modelLabel: 'v4.1-flash' }),
+  );
+  assert.equal(desc.modelLabel, 'v4.1-flash');
+});
+
+test('单一模型局不传模型名，3D 名牌只保留一行', () => {
+  const desc = buildVisibleAvatarDescriptor(makePlayer(11));
+  assert.equal(desc.modelLabel, undefined);
+});
+
+// ── look（形象）透传 ─────────────────────────────────────
+
+const look: AvatarLook = {
+  sprite: 'elf',
+  build: 'tall',
+  hairStyle: 2,
+  primary: '#6e3f91',
+  secondary: '#4a3f5c',
+  hair: '#4a3320',
+  skin: '#e6bb95',
+};
+
+test('分身配置的形象会带到 3D 描述符上', () => {
+  const desc = buildVisibleAvatarDescriptor(makePlayer(12, { look }));
+  assert.deepEqual(desc.look, look);
+});
+
+test('没配形象时不塞默认值，交给渲染层按 seed 派生', () => {
+  const desc = buildVisibleAvatarDescriptor(makePlayer(13));
+  assert.equal(desc.look, undefined);
+});
+
 // ── getLightingPreset ────────────────────────────────────
 
 test('daytime returns bright preset', () => {
@@ -280,5 +318,51 @@ test('overview camera stays outside the player ring and looks at the camp centre
   const pose = getOverviewCameraPose(false);
   const horizontalDistance = Math.hypot(pose.position.x, pose.position.z);
   assert.ok(horizontalDistance > 9);
-  assert.deepEqual(pose.target, { x: 0, y: 1.1, z: 0 });
+  assert.deepEqual(pose.target, { x: 0, y: 1.4, z: 0 });
+});
+
+test('全景机位不再退到营地建筑外圈之外（否则镜头前会挡一座塔）', () => {
+  for (const isNight of [false, true]) {
+    const pose = getOverviewCameraPose(isNight);
+    const horizontalDistance = Math.hypot(pose.position.x, pose.position.z);
+    // 营地固定道具最近的在 12.5m；机位必须站在里侧
+    assert.ok(horizontalDistance < 12.5, `${isNight ? '夜' : '日'}间机位 ${horizontalDistance.toFixed(1)}m 跑到道具外面了`);
+    assert.ok(pose.position.y > 4 && pose.position.y < 10, '机位高度应在可读范围内');
+  }
+});
+
+// ── 场景预设（群系切换） ────────────────────────────────
+
+test('每个方块场景预设都能解析成完整地形', () => {
+  for (const scene of Object.values(SCENES)) {
+    // 圣殿不是方块世界（CryptHall 现搭曲线几何），不在此列
+    if (scene.style === 'crypt') continue;
+    const terrain = getWorldTerrain(20260911, scene);
+    assert.ok(terrain.grass.length > 0, `${scene.id} 要有地表方块`);
+    assert.ok(terrain.heightAt(0, 0) === 0, `${scene.id} 营地中心应为平台高度`);
+  }
+});
+
+test('无水的场景不会生成湖面', () => {
+  for (const id of ['desert-ruins', 'dungeon-hall'] as const) {
+    const terrain = getWorldTerrain(20260911, SCENES[id]);
+    assert.equal(terrain.water.length, 0, `${id} 不该有水`);
+  }
+  const forest = getWorldTerrain(20260911, SCENES['forest-camp']);
+  assert.ok(forest.water.length > 0, '森林营地应当有湖');
+});
+
+test('圣殿不再生成任何方块地形（整套换了构造逻辑）', () => {
+  const terrain = getWorldTerrain(20260911, SCENES['dungeon-hall']);
+  assert.equal(terrain.trees.length, 0);
+  assert.equal(terrain.stone.length, 0, '不该再有方块石墙');
+  assert.equal(terrain.grass.length, 0, '不该再有方块地面');
+  assert.equal(terrain.heightAt(11, -7), 0, '圣殿是平地');
+});
+
+test('雪原与荒漠的地形起伏不同于森林', () => {
+  const forest = getWorldTerrain(20260911, SCENES['forest-camp']);
+  const desert = getWorldTerrain(20260911, SCENES['desert-ruins']);
+  const sample = (t: ReturnType<typeof getWorldTerrain>) => [t.heightAt(18, -6), t.heightAt(-20, 12), t.heightAt(26, 20)];
+  assert.notDeepEqual(sample(forest), sample(desert));
 });

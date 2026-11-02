@@ -1,3 +1,7 @@
+/* finesse · register=product · A=voxel-camp 暖色板(纸/木/墨/火把金/红石)
+ * B=Fusion Pixel 单字体+font-black 对比 · D=CSS steps() 像素动效 · E=方块营地
+ * SOUL=7 SPECTACLE=2 DENSITY=6 —— 全库色彩只从 :root 令牌取，见 themes/voxel-tokens.ts */
+
 /* 缝合像素字体(Fusion Pixel, OFL 开源授权) — 见 src/assets/fonts/Fusion-Pixel-OFL.txt */
 @font-face {
     font-family: 'Fusion Pixel';
@@ -17,12 +21,20 @@ body,
     width: 100%;
     height: 100%;
     height: 100dvh;
-    font-family: var(--font-active-body, 'Inter', sans-serif);
+    font-family: var(--font-active-body, 'Fusion Pixel', 'Courier New', ui-monospace, monospace);
     background-color: var(--color-bg, #0a0a0a);
     color: var(--color-fg, #e2e8f0);
     overflow: hidden;
     position: fixed;
     inset: 0;
+}
+
+/* 占位符：浏览器默认是灰 + 半透明，压在纸色/暗木底上要么发白要么看不见。
+   跟 currentColor 走（输入框自己都显式设了 color），所以浅底深底都读得清。 */
+input::placeholder,
+textarea::placeholder {
+    color: currentColor;
+    opacity: 0.6;
 }
 
 :root {
@@ -44,6 +56,7 @@ body,
     --voxel-stone-dark: #3a3f47;
     --voxel-wood: #8b5a2b;
     --voxel-wood-dark: #4b2d1a;
+    --voxel-wood-mid: #b78345;
     --voxel-paper: #f2dfaa;
     --voxel-paper-dim: #d8c089;
     --voxel-ink: #24170e;
@@ -55,28 +68,60 @@ body,
     --voxel-diamond: #4dd6e0;
     --voxel-dead: #596052;
     --voxel-dead-stamp: #b31923;
+    /* 纸面文字墨色(纸底小字 ≥4.5:1;仅用于纸/奶油底) */
+    --voxel-redstone-ink: #9e3127;
+    --voxel-torch-ink: #7f5210;
+    --voxel-emerald-ink: #256b38;
+    --voxel-water-ink: #2b5880;
+    /* 暗面强调字变体 */
+    --voxel-redstone-on-dark: #ff8a7a;
+    --voxel-emerald-on-dark: #7fd67f;
+    /* 实心色块上的白字 / 结算与闪光 */
+    --voxel-redstone-deep: #c0392b;
+    --voxel-sheriff-gold: #b8860b;
+    --voxel-solid-white: #ffffff;
+    /* 死亡卡 */
+    --voxel-dead-card: #40463d;
+    --voxel-dead-text: #c2c8ba;
+    /* 暖色浮雕(玩家输入面板的 MC 致敬;高光/外描边复用 paper/ink) */
+    --voxel-mc-panel: #c9b995;
+    --voxel-mc-field: #1a1008;
+    --voxel-mc-inset-shadow: #3a2415;
+    --voxel-mc-bevel-dark: #6b5535;
     --voxel-border-w: 3px;
     --voxel-border-w-lg: 4px;
-    --voxel-shadow: 3px 3px 0 #24170e;
-    --voxel-shadow-lg: 6px 6px 0 #24170e;
-    --voxel-shadow-xl: 8px 8px 0 #24170e;
+    --voxel-shadow: 3px 3px 0 var(--voxel-ink);
+    --voxel-shadow-lg: 6px 6px 0 var(--voxel-ink);
+    --voxel-shadow-xl: 8px 8px 0 var(--voxel-ink);
     --voxel-font: 'Fusion Pixel', 'Courier New', ui-monospace, monospace;
 
     /* 主题语义色回退(对齐体素调色板) */
-    --color-bg: #3c2617;
-    --color-bg-secondary: #4b2d1a;
-    --color-fg: #f2dfaa;
-    --color-accent1: #f6b443;
-    --color-accent2: #d94b3d;
-    --color-accent3: #48c774;
+    --color-bg: var(--voxel-ink-soft);
+    --color-bg-secondary: var(--voxel-wood-dark);
+    --color-fg: var(--voxel-paper);
+    --color-accent1: var(--voxel-torch);
+    --color-accent2: var(--voxel-redstone);
+    --color-accent3: var(--voxel-emerald);
     --color-accent1-rgb: 246, 180, 67;
-    --color-card: #f2dfaa;
-    --color-border: #24170e;
-    --color-muted: #d8c089;
-    --color-wolf: #d94b3d;
-    --color-god: #f6b443;
-    --color-villager: #48c774;
-    --color-dead: #596052;
+    --color-card: var(--voxel-paper);
+    --color-border: var(--voxel-ink);
+    --color-muted: var(--voxel-paper-dim);
+    --color-wolf: var(--voxel-redstone);
+    --color-god: var(--voxel-torch);
+    --color-villager: var(--voxel-emerald);
+    --color-dead: var(--voxel-dead);
+
+    /* th-* 通道值（配合 tailwind <alpha-value> 让 bg-th-card/70 类产生真实透明度） */
+    --th-bg-rgb: 60 38 23;
+    --th-fg-rgb: 242 223 170;
+    --th-accent1-rgb: 246 180 67;
+    --th-accent2-rgb: 217 75 61;
+    --th-accent3-rgb: 72 199 116;
+    --th-card-rgb: 75 45 26; /* 与 ThemeProvider 运行时 --color-card(voxel woodDark)一致 */
+    --th-border-rgb: 36 23 14;
+    --th-wolf-rgb: 217 75 61;
+    --th-god-rgb: 246 180 67;
+    --th-dead-rgb: 89 96 82;
 
     --font-display: var(--voxel-font);
     --font-body: var(--voxel-font);
@@ -175,7 +220,7 @@ body,
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9c9c9c; }
 
 /* 选中文字用火把金 */
-::selection { background: #f6b443; color: #24170e; }
+::selection { background: var(--voxel-torch); color: var(--voxel-ink); }
 
 /* 输入类控件保留系统文本光标,不吃像素箭头 */
 input, textarea { cursor: text !important; }
@@ -210,15 +255,19 @@ input, textarea { cursor: text !important; }
     animation: vw-speak-breathe 2.2s ease-in-out infinite;
 }
 @keyframes vw-speak-breathe {
-    0%, 100% { box-shadow: 3px 3px 0 var(--voxel-ink), 0 0 10px 2px rgba(246, 180, 67, 0.4); }
-    50% { box-shadow: 3px 3px 0 var(--voxel-ink), 0 0 28px 9px rgba(246, 180, 67, 0.7); }
+    0%, 100% { box-shadow: 3px 3px 0 var(--voxel-ink), 0 0 10px 2px rgba(var(--color-accent1-rgb), 0.4); }
+    50% { box-shadow: 3px 3px 0 var(--voxel-ink), 0 0 28px 9px rgba(var(--color-accent1-rgb), 0.7); }
 }
 /* 夜晚火把/营火辉光放大 1.6 倍,白天保持常态 */
 .vw-fire { filter: brightness(1); transition: filter 1200ms ease; }
 .vw-night .vw-fire { filter: brightness(1.32) drop-shadow(0 0 6px var(--voxel-torch)); }
 
 /* ===== 阶段播报横幅(入夜/天亮仪式感) ===== */
-.vw-phase-banner { animation: vw-phase-arrive 2.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.vw-phase-banner { animation: vw-phase-arrive 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes vw-phase-arrive {
+    from { opacity: 0; transform: translateY(-14px) scale(0.94); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
 @media (prefers-reduced-motion: reduce) {
     .vw-phase-banner { animation: none; }
 }
@@ -232,15 +281,6 @@ input, textarea { cursor: text !important; }
     0%, 100% { transform: scale(1) translateY(0); filter: brightness(1); }
     30% { transform: scale(1.05, 0.96) translateY(0.5px); filter: brightness(1.12); }
     60% { transform: scale(0.97, 1.04) translateY(-0.5px); filter: brightness(0.95); }
-}
-.vw-cloud {
-    position: absolute;
-    pointer-events: none;
-    animation: vw-cloud-drift linear infinite;
-}
-@keyframes vw-cloud-drift {
-    from { transform: translateX(-120px); }
-    to { transform: translateX(680px); }
 }
 .vw-firefly {
     position: absolute;
@@ -281,21 +321,60 @@ input, textarea { cursor: text !important; }
     font-family: 'Fusion Pixel', 'Courier New', ui-monospace, monospace;
 }
 
-/* 像素滑杆：方块轨道 + 米色方形滑块，填充比例由 --pixel-fill 控制 */
+/* 设置页移动端分区标签行:横滑 + 调色板配色滚动条 + 右缘渐隐,提示可滑动 */
+.settings-tab-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+    -webkit-overflow-scrolling: touch;
+}
+.settings-tab-scroll::-webkit-scrollbar { height: 6px; }
+.settings-tab-scroll::-webkit-scrollbar-track { background: transparent; }
+.settings-tab-scroll::-webkit-scrollbar-thumb { background: var(--color-border); }
+.settings-tab-scroll::-webkit-scrollbar-thumb:hover { background: var(--color-accent1); }
+.settings-tab-edge { position: relative; }
+.settings-tab-edge::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 6px;
+    width: 32px;
+    background: linear-gradient(to right, transparent, var(--color-bg));
+    pointer-events: none;
+}
+
+/* 像素滑杆：方块轨道 + 米色方形滑块，填充比例由 --pixel-fill 控制。
+   视觉轨道保持 12px；输入盒用上下 padding 把触控热区扩到 44px（触控目标），轨道绘制移到 track 伪元素。 */
 .pixel-slider {
     -webkit-appearance: none;
     appearance: none;
+    box-sizing: content-box;
+    height: 12px;
+    padding: 16px 0;
+    border: none;
+    background: transparent;
+    outline: none;
+}
+/* 键盘焦点（:focus-visible 才显示，鼠标点击不打扰）：红石色外描边 */
+.pixel-slider:focus-visible {
+    outline: 3px solid var(--color-accent2, #d94b3d);
+    outline-offset: 2px;
+}
+.pixel-slider::-webkit-slider-runnable-track {
+    -webkit-appearance: none;
+    appearance: none;
+    box-sizing: border-box;
     height: 12px;
     border: 2px solid var(--color-border);
     background: linear-gradient(to right, var(--color-accent1) var(--pixel-fill, 50%), var(--color-bg) var(--pixel-fill, 50%));
-    outline: none;
 }
 .pixel-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
     width: 14px;
     height: 22px;
-    background: #f2dfaa;
+    margin-top: -5px; /* 22px 滑块对齐 12px 轨道中心 */
+    background: var(--voxel-paper);
     border: 2px solid var(--color-border);
     box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45);
     cursor: pointer;
@@ -303,18 +382,21 @@ input, textarea { cursor: text !important; }
 .pixel-slider::-moz-range-thumb {
     width: 14px;
     height: 22px;
-    background: #f2dfaa;
+    background: var(--voxel-paper);
     border: 2px solid var(--color-border);
     border-radius: 0;
     box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45);
     cursor: pointer;
 }
 .pixel-slider::-moz-range-track {
-    background: transparent;
+    box-sizing: border-box;
+    height: 12px;
+    border: 2px solid var(--color-border);
+    background: linear-gradient(to right, var(--color-accent1) var(--pixel-fill, 50%), var(--color-bg) var(--pixel-fill, 50%));
 }
 
 /* ===== 逐票开票板 ===== */
-.vw-vote-chip { animation: vw-vote-drop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) backwards; }
+.vw-vote-chip { animation: vw-vote-drop 0.5s cubic-bezier(0.2, 0.85, 0.35, 1) backwards; }
 @keyframes vw-vote-drop {
     from { transform: translateY(-14px); opacity: 0; }
     to { transform: translateY(0); opacity: 1; }
@@ -353,15 +435,21 @@ input, textarea { cursor: text !important; }
 }
 
 /* ===== 首页营火装饰（呼应"点燃营火"主题，纯装饰 pointer-events:none） ===== */
-.vw-campfire { position: relative; width: 150px; height: 150px; pointer-events: none; }
+/* 营火装饰：整块尺寸走 --cf-size，内部一律用百分比定位。
+   原来是写死的 150px 盒子 + 112px 火焰，1080×675 的窗口里可用高度只有 133px，
+   盒子上下各溢出 9px/10px，火焰顶部被上面那张说明卡盖掉半截。
+   现在矮窗口把 --cf-size 调小，整团火等比缩，不再压到相邻区块。 */
+.vw-campfire { position: relative; width: var(--cf-size, 150px); height: var(--cf-size, 150px); pointer-events: none; }
 .vw-campfire .glow {
-    position: absolute; left: 50%; bottom: 2px; width: 150px; height: 54px;
+    position: absolute; left: 50%; bottom: 1.3%; width: 100%; height: 36%;
     transform: translateX(-50%);
-    background: radial-gradient(closest-side, rgba(246, 180, 67, 0.5), transparent);
+    background: radial-gradient(closest-side, rgba(var(--color-accent1-rgb), 0.5), transparent);
     animation: vw-glow 1.6s steps(2) infinite;
 }
-.vw-campfire .pixel-flame { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); width: 112px; height: 112px; }
-.vw-campfire .ember { position: absolute; bottom: 34px; left: 50%; width: 4px; height: 4px; background: #f6b443; animation: vw-ember 2.2s linear infinite; }
+.vw-campfire .pixel-flame { position: absolute; bottom: 6.7%; left: 50%; transform: translateX(-50%); }
+.vw-campfire .ember { position: absolute; bottom: 22.7%; left: 50%; width: 4px; height: 4px; background: var(--voxel-torch); animation: vw-ember 2.2s linear infinite; }
+@media (max-height: 760px) { .vw-campfire { --cf-size: 124px; } }
+@media (max-height: 640px) { .vw-campfire { --cf-size: 92px; } }
 @keyframes vw-glow { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.95; } }
 @keyframes vw-ember {
     0% { transform: translate(-50%, 0); opacity: 1; }
@@ -373,11 +461,29 @@ input, textarea { cursor: text !important; }
 @keyframes vw-cloud-drift { from { transform: translateX(-25vw); } to { transform: translateX(120vw); } }
 
 /* ===== 2D 场景:发言人像素分身弹跳 ===== */
-@keyframes vw-px-speak-bounce {
+@keyframes vw-px-speak-bob {
     0%, 100% { transform: translateY(0); }
     50% { transform: translateY(-7px); }
 }
-.vw-px-speaking { animation: vw-px-speak-bounce 0.8s ease-in-out infinite; transform-origin: bottom center; }
+.vw-px-speaking { animation: vw-px-speak-bob 0.8s ease-in-out infinite; transform-origin: bottom center; }
+
+/* ===== 2D 角色待机动画：4 帧竖排成条，整条上移到下一帧（steps 保证硬切、不插值） ===== */
+@keyframes vw-sprite-strip {
+    from { transform: translateY(0); }
+    to { transform: translateY(-100%); }
+}
+
+/* ===== 流式字幕：光标闪 + 三个等待点 ===== */
+@keyframes vw-caret-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+.vw-caret { animation: vw-caret-blink 1s steps(1) infinite; }
+@keyframes vw-thinking-bob {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+    40% { transform: translateY(-3px); opacity: 1; }
+}
+.vw-thinking-dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 9999px;
+    background: currentColor; animation: vw-thinking-bob 1.1s ease-in-out infinite;
+}
 
 /* ===== 2D 场景动态增强:营火余烬 / 日月交替 / 卡片呼吸 ===== */
 .vw-ember {
@@ -405,7 +511,7 @@ input, textarea { cursor: text !important; }
 .vw-card-pulse { animation: vw-card-pulse 1.8s ease-in-out infinite; }
 @keyframes vw-card-pulse {
     0%, 100% { box-shadow: 3px 3px 0 var(--voxel-ink); }
-    50% { box-shadow: 3px 3px 0 var(--voxel-ink), 0 0 16px 3px rgba(246, 180, 67, 0.55); }
+    50% { box-shadow: 3px 3px 0 var(--voxel-ink), 0 0 16px 3px rgba(var(--color-accent1-rgb), 0.55); }
 }
 .vw-speaker-badge { animation: vw-badge-float 3.2s ease-in-out infinite; }
 @keyframes vw-badge-float {
@@ -429,4 +535,32 @@ input, textarea { cursor: text !important; }
     25% { content: '.'; }
     50% { content: '..'; }
     75%, 100% { content: '...'; }
+}
+
+/* ===== prefers-reduced-motion：定向停用循环动效（须置于被停用规则之后才生效）=====
+   只停"装饰性循环"，保留状态可见与进度反馈：
+   - animate-spin / vw-think-dots（思考点）承载进度，保留；
+   - 发言者呼吸辉光换成静态光晕，说话状态仍可辨；
+   - 不做全局 animation-duration 清零，避免吞掉状态切换反馈。 */
+@media (prefers-reduced-motion: reduce) {
+    .animate-pulse { animation: none; }
+
+    /* 营地循环装饰：余烬上升 / 萤火漂浮 / 云飘 / 火苗摇曳 / 辉光脉动 / 徽章浮动 —— 定格但元素可见 */
+    .vw-ember,
+    .vw-campfire .ember,
+    .vw-campfire .glow,
+    .vw-cloud,
+    .vw-firefly,
+    .vw-fire,
+    .vw-sun-glow,
+    .vw-card-pulse,
+    .vw-speaker-badge,
+    .vw-speaker-badge-x,
+    .vw-px-speaking { animation: none; }
+
+    /* 发言者：呼吸动效停用，光晕转为静态常亮（状态不丢） */
+    .vw-night .vw-player-card.vw-card-lit {
+        animation: none;
+        box-shadow: 3px 3px 0 var(--voxel-ink), 0 0 16px 4px rgba(var(--color-accent1-rgb), 0.55);
+    }
 }

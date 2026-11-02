@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { useAtomValue } from 'jotai';
 import { replayPerspectiveAtom, isTheaterModeAtom, playersAtom, debugGodViewAtom } from '../store';
@@ -9,6 +9,12 @@ import { PixelAvatarHead } from './game/voxel/primitives';
 const cleanContent = (text: string) => {
     if (!text) return "";
     return text.replace(/[\(（][^\)）]*[\)）]/g, '').trim();
+};
+
+// 系统行自带「上帝」小标时，去掉行首重复的「上帝:/上帝(私聊):」称呼；只动这一种前缀，其余原样保留
+const stripGodPrefix = (text: string) => {
+    const stripped = text.replace(/^上帝(?:\(私聊\))?\s*[：:]\s*/u, '').trim();
+    return stripped || text;
 };
 
 interface LogItemProps {
@@ -46,7 +52,8 @@ const LogItemComponent: React.FC<LogItemProps> = ({ log, viewerId }) => {
         if (!role) return 'var(--color-muted)';
         const player = players.find(p => p.id === role);
         if (!player) return 'var(--color-muted)';
-        if (WOLF_ROLES.includes(player.role)) return 'var(--color-wolf)';
+        // 日志面板是深木底:狼名用暗面红变体(5.43:1),纯 --color-wolf 只有 2.97:1
+        if (WOLF_ROLES.includes(player.role)) return 'var(--voxel-redstone-on-dark)';
         return 'var(--color-god)';
     };
 
@@ -68,21 +75,30 @@ const LogItemComponent: React.FC<LogItemProps> = ({ log, viewerId }) => {
     return (
         <div className={clsx(
             "mb-2",
-            log.isSystem ? "text-center my-1" : "",
+            log.isSystem ? "my-1.5" : "",
         )}>
             {log.isSystem ? (
-                <div
-                    className={clsx(
-                        "inline-block rounded-full font-bold tracking-wider whitespace-pre-wrap",
-                        "px-2.5 py-0.5 text-[9px] sm:text-[10px]",
-                    )}
-                    style={{
-                        background: 'var(--voxel-paper-dim)',
-                        color: 'var(--voxel-ink)',
-                        opacity: 0.8,
-                    }}
-                >
-                    {getPhaseIcon(log.phase)}{finalContent}
+                // 系统/上帝播报：营火纸底上的窄横幅 + 「上帝」墨底小标，与玩家发言气泡明确区分。
+                // inkSoft 文字在 paper-dim 底上 7.9:1；不透明度一律不用（craft floor 对比度红线）
+                <div className="flex justify-center">
+                    <div
+                        className="flex max-w-[95%] items-start gap-1.5 border-2 px-2.5 py-1.5"
+                        style={{
+                            background: 'var(--voxel-paper-dim)',
+                            borderColor: 'var(--voxel-ink)',
+                        }}
+                    >
+                        <span
+                            className="shrink-0 border-2 px-1 py-px text-xs font-black tracking-[0.1em]"
+                            style={{ background: 'var(--voxel-ink)', color: 'var(--voxel-torch)', borderColor: 'var(--voxel-ink)' }}
+                        >上帝</span>
+                        <span
+                            className="whitespace-pre-wrap break-words text-center text-xs font-bold leading-relaxed tracking-[0.05em]"
+                            style={{ color: 'var(--voxel-ink-soft)' }}
+                        >
+                            {getPhaseIcon(log.phase)}{stripGodPrefix(finalContent)}
+                        </span>
+                    </div>
                 </div>
             ) : (
                 <div className={clsx(
@@ -98,7 +114,7 @@ const LogItemComponent: React.FC<LogItemProps> = ({ log, viewerId }) => {
                             border: `2px solid ${getRoleColor(log.speakerId)}`,
                         }}
                     >
-                        <PixelAvatarHead seed={avatarSeed} className="w-full h-full" />
+                        <PixelAvatarHead seed={avatarSeed} look={speakerPlayer?.look} className="w-full h-full" />
                     </div>
                     <div className={clsx(
                         "flex flex-col max-w-[92%]",
@@ -108,7 +124,7 @@ const LogItemComponent: React.FC<LogItemProps> = ({ log, viewerId }) => {
                             <div
                                 className={clsx(
                                     "flex items-center gap-1 leading-none",
-                                    "text-[9px]"
+                                    "text-xs"
                                 )}
                                 style={{ color: 'var(--voxel-paper-dim)' }}
                             >
@@ -148,6 +164,9 @@ export const AutoScrollLog = ({ logs, className, viewerId }: { logs: GameLog[], 
     const scrollRef = useRef<HTMLDivElement>(null);
     const isNearBottomRef = useRef(true);
     const autoFollowRef = useRef(true);
+    // 日志总是自动贴底，所以顶部那一行几乎永远是被横切一半的——不知道的人会以为渲染坏了。
+    // 滚过 6px 就在顶部压一道 18px 渐隐，把「上面还有」讲清楚；滚回顶部自动收掉。
+    const [fadeTop, setFadeTop] = useState(false);
     // 日志流呈现全部内容（含玩家发言），只过滤事件流调试痕迹（兼容仍内嵌痕迹的旧存档）
     const feedLogs = useMemo(() => logs.filter(l => l.debugType !== 'EVENT_TRACE'), [logs]);
     const lastLog = feedLogs.length ? feedLogs[feedLogs.length - 1] : null;
@@ -167,6 +186,7 @@ export const AutoScrollLog = ({ logs, className, viewerId }: { logs: GameLog[], 
             const nearBottom = checkNearBottom();
             isNearBottomRef.current = nearBottom;
             autoFollowRef.current = nearBottom;
+            setFadeTop(el.scrollTop > 6);
         };
         const pauseAutoFollow = () => {
             autoFollowRef.current = false;
@@ -205,7 +225,10 @@ export const AutoScrollLog = ({ logs, className, viewerId }: { logs: GameLog[], 
         <div
             ref={scrollRef}
             className={clsx("overflow-y-auto custom-scrollbar relative", className)}
-            style={{ touchAction: 'pan-y', overscrollBehavior: 'auto', WebkitOverflowScrolling: 'touch', scrollbarGutter: 'stable' }}
+            style={{
+                touchAction: 'pan-y', overscrollBehavior: 'auto', WebkitOverflowScrolling: 'touch', scrollbarGutter: 'stable',
+                ...(fadeTop ? { maskImage: 'linear-gradient(180deg, transparent 0, #000 18px)', WebkitMaskImage: 'linear-gradient(180deg, transparent 0, #000 18px)' } : null),
+            }}
         >
             {feedLogs.length === 0 ? (
                 <div className="h-full flex items-center justify-center opacity-50 text-xl" style={{ color: 'var(--voxel-paper-dim)' }}>

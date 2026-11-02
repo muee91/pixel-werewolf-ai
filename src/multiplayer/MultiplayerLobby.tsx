@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAtom } from 'jotai';
 import clsx from 'clsx';
-import { McIcon } from '../components/game/voxel/primitives';
+import { CampIcon } from '../components/game/voxel/primitives';
 import { useRoomService } from './useRoomService';
 import { RoomInfo, RoomState } from './types';
 import { GAME_PRESETS } from '../types';
@@ -14,8 +14,9 @@ interface MultiplayerLobbyProps {
     onEnterRoom: (roomId: string, playerId: string, nickname: string, sessionToken: string, autoReady?: boolean) => void;
 }
 
-const fieldLabelClass = 'block text-[11px] font-black uppercase tracking-[0.22em] mb-2';
-const fieldClass = 'w-full px-3 py-3 text-sm outline-none transition-all';
+const fieldLabelClass = 'block text-xs font-black uppercase tracking-[0.22em] mb-2';
+// outline:none 必须配 focus-visible 替代描边，否则键盘用户丢失焦点位置
+const fieldClass = 'w-full px-3 py-3 text-sm outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent2)] transition-all';
 const fieldStyle = {
     background: 'var(--voxel-paper)',
     border: '3px solid var(--voxel-ink)',
@@ -30,7 +31,7 @@ const panelStyle = {
 const secondaryButtonStyle = {
     color: 'var(--voxel-paper)',
     borderColor: 'var(--voxel-ink)',
-    background: 'var(--voxel-wood)',
+    background: 'var(--color-card)',
 } as const;
 
 export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEnterRoom }) => {
@@ -188,7 +189,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
             right={view === 'LIST' ? (
                 <button
                     onClick={loadRooms}
-                    className={clsx('border-[3px] px-3 py-2 text-xs font-black transition-all active:translate-x-[2px] active:translate-y-[2px]', isRefreshing && 'animate-pulse')}
+                    className={clsx('min-h-11 border-[3px] px-3 py-2 text-xs font-black transition-all active:translate-x-[2px] active:translate-y-[2px]', isRefreshing && 'animate-pulse')}
                     style={{ borderColor: 'var(--voxel-ink)', color: 'var(--voxel-ink)', background: 'var(--voxel-paper)', boxShadow: '3px 3px 0 var(--voxel-ink)' }}
                 >
                     刷新列表
@@ -208,14 +209,14 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                         value={nickname}
                                         onChange={e => handleNicknameChange(e.target.value)}
                                         placeholder="输入昵称（最多5个字）"
-                                        className="w-full px-3 py-2.5 text-sm outline-none"
+                                        className="w-full px-3 py-2.5 text-sm outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent2)]"
                                         style={{ background: 'var(--voxel-paper)', border: '3px solid var(--voxel-ink)', color: 'var(--voxel-ink)' }}
                                         maxLength={5}
                                     />
                                 </div>
-                                <button onClick={() => handleNicknameChange(randomVillagerName(nickname))} title="随机起名"
-                                    className="mt-6 shrink-0 w-9 h-9 rounded-none border-[3px] text-base transition-all active:scale-95"
-                                    style={{ background: 'var(--voxel-wood)', borderColor: 'var(--voxel-ink)', color: 'var(--voxel-paper)' }}>🎲</button>
+                                <button onClick={() => handleNicknameChange(randomVillagerName(nickname))} title="随机起名" aria-label="随机起名"
+                                    className="mt-6 shrink-0 min-h-11 min-w-11 rounded-none border-[3px] text-base transition-all active:scale-95"
+                                    style={{ background: 'var(--voxel-wood-mid)', borderColor: 'var(--voxel-ink)', color: 'var(--voxel-ink)' }}>🎲</button>
                                 <div className="text-xs mt-6 font-bold" style={{ color: 'var(--voxel-paper-dim)' }}>{nickname.length}/5</div>
                             </div>
                         </div>
@@ -231,7 +232,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                             <button
                                 onClick={() => setView('JOIN')}
                                 className="flex-1 border-[4px] py-3 font-black transition-all active:translate-x-[2px] active:translate-y-[2px]"
-                                style={{ background: 'var(--voxel-wood)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)', boxShadow: '4px 4px 0 var(--voxel-ink)' }}
+                                style={{ background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)', boxShadow: '4px 4px 0 var(--voxel-ink)' }}
                             >
                                 加入房间
                             </button>
@@ -241,7 +242,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                             <span className="text-xs font-black uppercase tracking-wide" style={{ color: 'var(--voxel-paper-dim)' }}>
                                 可用房间 ({rooms.length})
                             </span>
-                            <span className="text-[11px] font-bold" style={{ color: 'var(--voxel-torch)' }}>
+                            <span className="text-xs font-bold" style={{ color: 'var(--voxel-torch)' }}>
                                 5 秒自动刷新
                             </span>
                         </div>
@@ -253,7 +254,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                             </div>
                         ) : rooms.length === 0 ? (
                             <div className="border-[3px] p-8 text-center shadow-[4px_4px_0_var(--voxel-ink)]" style={{ background: 'var(--voxel-wood-dark)', borderColor: 'var(--voxel-ink)' }}>
-                                <div className="mb-3"><McIcon icon="mc:door" px={4} /></div>
+                                <div className="mb-3"><CampIcon icon="tile:door" px={4} /></div>
                                 <p className="text-sm" style={{ color: 'var(--voxel-paper)' }}>暂无可用房间</p>
                                 <p className="text-xs mt-1" style={{ color: 'var(--voxel-paper-dim)' }}>点击上方按钮创建或加入房间</p>
                             </div>
@@ -278,7 +279,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                                 <div className="text-sm font-black" style={{ color: 'var(--voxel-torch)' }}>
                                                     {room.playerCount}/{room.maxPlayers}
                                                 </div>
-                                                <div className="text-[10px]" style={{ color: 'var(--voxel-paper-dim)' }}>玩家</div>
+                                                <div className="text-xs" style={{ color: 'var(--voxel-paper-dim)' }}>玩家</div>
                                             </div>
                                         </div>
                                     </button>
@@ -293,15 +294,15 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                         <div className="border-[3px] p-5 space-y-5 shadow-[6px_6px_0_var(--voxel-ink)]" style={panelStyle}>
                             <div className="grid gap-3 border-[3px] p-4 sm:grid-cols-3" style={{ background: 'var(--voxel-ink-soft)', borderColor: 'var(--voxel-ink)' }}>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>流程</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>流程</div>
                                     <div className="mt-1 text-sm font-black" style={{ color: 'var(--voxel-paper)' }}>1. 填信息</div>
                                 </div>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>配置</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>配置</div>
                                     <div className="mt-1 text-sm font-black" style={{ color: 'var(--voxel-paper)' }}>2. 选板子</div>
                                 </div>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>进入</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>进入</div>
                                     <div className="mt-1 text-sm font-black" style={{ color: 'var(--voxel-paper)' }}>3. 直接进房</div>
                                 </div>
                             </div>
@@ -309,8 +310,8 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                 <div className="flex items-center justify-between">
                                     <label htmlFor="create-nickname" className={fieldLabelClass} style={fieldHintStyle}>你的昵称</label>
                                     <button onClick={() => handleNicknameChange(randomVillagerName(nickname))} title="随机起名"
-                                        className="text-xs px-2 py-0.5 rounded-none border-2 transition-all active:scale-95"
-                                        style={{ borderColor: 'var(--voxel-ink)', background: 'var(--voxel-wood)', color: 'var(--voxel-paper)' }}>🎲 随机</button>
+                                        className="min-h-11 text-xs px-2 py-0.5 rounded-none border-2 transition-all active:scale-95"
+                                        style={{ borderColor: 'var(--voxel-ink)', background: 'var(--color-card)', color: 'var(--voxel-paper)' }}>🎲 随机</button>
                                 </div>
                                 <input
                                     id="create-nickname"
@@ -322,7 +323,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                     style={fieldStyle}
                                     maxLength={5}
                                 />
-                                <div className="mt-1 text-right text-[10px]" style={fieldHintStyle}>{nickname.length}/5</div>
+                                <div className="mt-1 text-right text-xs" style={fieldHintStyle}>{nickname.length}/5</div>
                             </div>
                             <div>
                                 <label htmlFor="create-room-name" className={fieldLabelClass} style={fieldHintStyle}>房间名称</label>
@@ -336,7 +337,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                     style={fieldStyle}
                                     maxLength={20}
                                 />
-                                <div className="mt-1 text-right text-[10px]" style={fieldHintStyle}>{roomName.length}/20</div>
+                                <div className="mt-1 text-right text-xs" style={fieldHintStyle}>{roomName.length}/20</div>
                             </div>
                             <div>
                                 <label htmlFor="create-room-password" className={fieldLabelClass} style={fieldHintStyle}>房间密码（可选）</label>
@@ -392,11 +393,11 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                         <div className="border-[3px] p-5 space-y-5 shadow-[6px_6px_0_var(--voxel-ink)]" style={panelStyle}>
                             <div className="grid gap-3 border-[3px] p-4 sm:grid-cols-2" style={{ background: 'var(--voxel-ink-soft)', borderColor: 'var(--voxel-ink)' }}>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>精确加入</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>精确加入</div>
                                     <div className="mt-1 text-sm" style={{ color: 'var(--voxel-paper)' }}>先看房间状态，再选座位</div>
                                 </div>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>快速加入</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>快速加入</div>
                                     <div className="mt-1 text-sm" style={{ color: 'var(--voxel-paper)' }}>直接自动分配空位</div>
                                 </div>
                             </div>
@@ -412,7 +413,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                     style={fieldStyle}
                                     maxLength={5}
                                 />
-                                <div className="mt-1 text-right text-[10px]" style={fieldHintStyle}>{nickname.length}/5</div>
+                                <div className="mt-1 text-right text-xs" style={fieldHintStyle}>{nickname.length}/5</div>
                             </div>
                             <div>
                                 <label htmlFor="join-room-id" className={fieldLabelClass} style={fieldHintStyle}>房间 ID</label>
@@ -473,26 +474,26 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                         <div className="border-[3px] p-5 shadow-[6px_6px_0_var(--voxel-ink)]" style={panelStyle}>
                             <div className="flex items-center justify-between gap-3 mb-1">
                                 <div className="font-black" style={{ color: 'var(--voxel-paper)' }}>{roomDetail.roomName}</div>
-                                <div className="border-[3px] px-2.5 py-1 text-[11px] font-black" style={{ color: 'var(--voxel-ink)', background: 'var(--voxel-torch)', borderColor: 'var(--voxel-ink)' }}>{roomDetail.maxPlayers}人局</div>
+                                <div className="border-[3px] px-2.5 py-1 text-xs font-black" style={{ color: 'var(--voxel-ink)', background: 'var(--voxel-torch)', borderColor: 'var(--voxel-ink)' }}>{roomDetail.maxPlayers}人局</div>
                             </div>
-                            <div className="text-[10px] font-mono mb-4" style={fieldHintStyle}>{roomDetail.roomId.slice(0, 8)}</div>
+                            <div className="text-xs font-mono mb-4" style={fieldHintStyle}>{roomDetail.roomId.slice(0, 8)}</div>
 
                             <div className="grid gap-3 border-[3px] p-4 mb-4 sm:grid-cols-3" style={{ background: 'var(--voxel-ink-soft)', borderColor: 'var(--voxel-ink)' }}>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>已入座</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>已入座</div>
                                     <div className="mt-1 text-base font-black" style={{ color: 'var(--voxel-paper)' }}>{roomDetail.players.length}</div>
                                 </div>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>空位</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>空位</div>
                                     <div className="mt-1 text-base font-black" style={{ color: 'var(--voxel-paper)' }}>{Math.max(0, roomDetail.maxPlayers - roomDetail.players.length)}</div>
                                 </div>
                                 <div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>房主</div>
+                                    <div className="text-xs font-black uppercase tracking-[0.22em]" style={fieldHintStyle}>房主</div>
                                     <div className="mt-1 text-base font-black truncate" style={{ color: 'var(--voxel-paper)' }}>{roomDetail.players.find(p => p.playerId === roomDetail.hostPlayerId)?.nickname || '未识别'}</div>
                                 </div>
                             </div>
 
-                            <div className="text-[11px] font-black uppercase tracking-[0.22em] mb-3" style={fieldHintStyle}>
+                            <div className="text-xs font-black uppercase tracking-[0.22em] mb-3" style={fieldHintStyle}>
                                 选择你的座位
                             </div>
                             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -508,7 +509,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                             onClick={() => isEmpty && setSelectedSeat(seatNum)}
                                             disabled={!isEmpty}
                                             className={clsx(
-                                                'flex flex-col items-center gap-1 px-2 py-3 border-[3px] transition-all',
+                                                'flex flex-col min-w-0 items-center gap-1 px-1.5 py-3 border-[3px] transition-all',
                                                 isSelected
                                                     ? ''
                                                     : isEmpty
@@ -518,7 +519,7 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                             style={isSelected
                                                 ? { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)', boxShadow: '3px 3px 0 var(--voxel-ink)' }
                                                 : isEmpty
-                                                    ? { background: 'var(--voxel-wood)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)', borderStyle: 'dashed' }
+                                                    ? { background: 'var(--color-card)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)', borderStyle: 'dashed' }
                                                     : seatedPlayer?.isHost
                                                         ? { background: 'var(--voxel-stone)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)' }
                                                         : { background: 'var(--voxel-ink-soft)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)' }}
@@ -537,17 +538,17 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onBack, onEn
                                                 {seatNum}
                                             </div>
                                             <div className={clsx(
-                                                'text-[10px] font-medium text-center leading-tight truncate w-full',
+                                                'text-xs font-medium text-center leading-tight truncate w-full',
                                             )}>
                                                 {seatedPlayer ? seatedPlayer.nickname : isSelected ? nickname : '空位'}
                                             </div>
                                             {seatedPlayer && !isSelected && (
-                                                <div className="text-[9px]" style={fieldHintStyle}>
+                                                <div className="text-xs" style={fieldHintStyle}>
                                                     {seatedPlayer.isHost ? '房主' : '已占用'}
                                                 </div>
                                             )}
                                             {isSelected && (
-                                                <div className="text-[9px]" style={{ color: 'var(--voxel-ink)' }}>✓ 你的座位</div>
+                                                <div className="text-xs" style={{ color: 'var(--voxel-ink)' }}>✓ 你的座位</div>
                                             )}
                                         </button>
                                     );

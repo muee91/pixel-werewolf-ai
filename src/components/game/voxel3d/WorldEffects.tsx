@@ -2,16 +2,24 @@ import React, { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { getLightingPreset } from './sceneModel';
+import { DEFAULT_SCENE_ID, SCENES, type ScenePreset } from './biomes';
+
+// 减少动态偏好：模块级读取一次；减弱时连续装饰循环（星光闪烁/萤火漂移/云平流/篝火闪烁）定格在可见状态，
+// 昼夜状态切换改为瞬时完成（状态仍可见）；Node 测试环境无 matchMedia 时安全回退为 false
+const prefersReducedMotion =
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
 
 interface WorldEffectsProps {
   isNight: boolean;
   effectLevel: 'subtle' | 'medium' | 'intense';
+  /** 场景预设：天空/雾/光照倍率都按群系走 */
+  scene?: ScenePreset;
 }
 
 // ── 渐变天穹（日夜两套顶/底色，按 nightAmount 插值） ──────
 
-const SKY_DAY = { top: new THREE.Color('#6fc0f2'), bottom: new THREE.Color('#d8eef9') };
-const SKY_NIGHT = { top: new THREE.Color('#101f3e'), bottom: new THREE.Color('#33518a') };
 
 const skyVertexShader = `
   varying vec3 vPos;
@@ -30,15 +38,23 @@ const skyFragmentShader = `
   }
 `;
 
-const SkyDome: React.FC<{ nightAmountRef: React.MutableRefObject<number> }> = ({ nightAmountRef }) => {
+const SkyDome: React.FC<{
+  nightAmountRef: React.MutableRefObject<number>;
+  day: { top: string; bottom: string };
+  night: { top: string; bottom: string };
+}> = ({ nightAmountRef, day, night }) => {
+  const colors = useMemo(() => ({
+    day: { top: new THREE.Color(day.top), bottom: new THREE.Color(day.bottom) },
+    night: { top: new THREE.Color(night.top), bottom: new THREE.Color(night.bottom) },
+  }), [day.top, day.bottom, night.top, night.bottom]);
   const uniforms = useMemo(() => ({
-    topColor: { value: SKY_NIGHT.top.clone() },
-    bottomColor: { value: SKY_NIGHT.bottom.clone() },
-  }), []);
+    topColor: { value: colors.night.top.clone() },
+    bottomColor: { value: colors.night.bottom.clone() },
+  }), [colors]);
   useFrame(() => {
     const n = nightAmountRef.current;
-    uniforms.topColor.value.lerpColors(SKY_DAY.top, SKY_NIGHT.top, n);
-    uniforms.bottomColor.value.lerpColors(SKY_DAY.bottom, SKY_NIGHT.bottom, n);
+    uniforms.topColor.value.lerpColors(colors.day.top, colors.night.top, n);
+    uniforms.bottomColor.value.lerpColors(colors.day.bottom, colors.night.bottom, n);
   });
   return (
     <mesh scale={[110, 110, 110]}>
@@ -74,13 +90,13 @@ const Stars: React.FC<{ nightAmountRef: React.MutableRefObject<number> }> = ({ n
   }, []);
   useFrame(({ clock }) => {
     if (!matRef.current) return;
-    const twinkle = 0.75 + Math.sin(clock.elapsedTime * 1.7) * 0.25;
+    const twinkle = prefersReducedMotion ? 0.75 : 0.75 + Math.sin(clock.elapsedTime * 1.7) * 0.25;
     matRef.current.opacity = nightAmountRef.current * twinkle;
   });
   return (
     <points>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={140} array={positions} itemSize={3} />
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} count={140} itemSize={3} />
       </bufferGeometry>
       <pointsMaterial ref={matRef} color="#e8f1ff" size={1.6} sizeAttenuation={false} transparent opacity={0} fog={false} depthWrite={false} />
     </points>
@@ -139,7 +155,8 @@ const Fireflies: React.FC<{ count: number; nightAmountRef: React.MutableRefObjec
 
   const matRef = useRef<THREE.PointsMaterial>(null);
   useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
+    // 减弱动态：定格在初始位置，仅保留随昼夜出现的可见状态（不漂移、不闪烁）
+    const t = prefersReducedMotion ? 0 : clock.elapsedTime;
     if (matRef.current) matRef.current.opacity = nightAmountRef.current * (0.55 + Math.sin(t * 2.3) * 0.25);
     const points = pointsRef.current;
     if (!points) return;
@@ -155,7 +172,7 @@ const Fireflies: React.FC<{ count: number; nightAmountRef: React.MutableRefObjec
   return (
     <points ref={pointsRef}>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" count={count} array={base.slice()} itemSize={3} />
+        <bufferAttribute attach="attributes-position" args={[base.slice(), 3]} count={count} itemSize={3} />
       </bufferGeometry>
       <pointsMaterial ref={matRef} color="#f6e680" size={0.09} transparent opacity={0} sizeAttenuation depthWrite={false} />
     </points>
@@ -186,17 +203,19 @@ const Clouds: React.FC = () => {
   })), []);
 
   useFrame(({ clock }) => {
-    if (!ref.current) return;
-    const t = clock.elapsedTime;
+    const mesh = ref.current;
+    if (!mesh) return;
+    // 减弱动态：云定格在初始格位，不再平流
+    const t = prefersReducedMotion ? 0 : clock.elapsedTime;
     seeds.forEach((c, i) => {
       // 慢速平流，越界后从另一侧回来
       const x = ((c.x + t * c.speed + 75) % 150) - 75;
       dummy.position.set(x, c.y, c.z);
       dummy.scale.set(c.sx, 0.5, c.sz);
       dummy.updateMatrix();
-      ref.current.setMatrixAt(i, dummy.matrix);
+      mesh.setMatrixAt(i, dummy.matrix);
     });
-    ref.current.instanceMatrix.needsUpdate = true;
+    mesh.instanceMatrix.needsUpdate = true;
   });
 
   return (
@@ -206,7 +225,8 @@ const Clouds: React.FC = () => {
 
 // ── 主组件：平滑日夜过渡的光照系统 ──────────────────────
 
-export const WorldEffects: React.FC<WorldEffectsProps> = ({ isNight, effectLevel }) => {
+export const WorldEffects: React.FC<WorldEffectsProps> = ({ isNight, effectLevel, scene: scenePreset }) => {
+  const sceneCfg = scenePreset ?? SCENES[DEFAULT_SCENE_ID];
   const preset = useMemo(() => getLightingPreset(!isNight), [isNight]);
   const nightAmountRef = useRef(isNight ? 1 : 0);
   const { scene } = useThree();
@@ -237,38 +257,51 @@ export const WorldEffects: React.FC<WorldEffectsProps> = ({ isNight, effectLevel
   useFrame(({ clock }, delta) => {
     const target = isNight ? 1 : 0;
     const cur = nightAmountRef.current;
-    // 约 2 秒完成日夜过渡
-    nightAmountRef.current = cur + (target - cur) * Math.min(1, delta * 1.6);
+    // 约 2 秒完成日夜过渡；减弱动态时瞬时到位（状态仍完整可见）
+    nightAmountRef.current = prefersReducedMotion ? target : cur + (target - cur) * Math.min(1, delta * 1.6);
     const n = nightAmountRef.current;
     const day = presets.day;
     const night = presets.night;
 
     if (ambientRef.current) {
-      ambientRef.current.intensity = day.ambientIntensity + (night.ambientIntensity - day.ambientIntensity) * n;
-      ambientRef.current.color.copy(tmp.ambient.set('#ffffff').lerp(tmp.nvidiaAmbient, n));
+      const ambient = (day.ambientIntensity + (night.ambientIntensity - day.ambientIntensity) * n) * sceneCfg.light.ambient;
+      // 室内没有天光可借：给一条自己的昼夜曲线（白天 1.55 / 夜里 1.1），
+      // 直接沿用室外预设会出现"白天和夜里一样亮"——室外的昼夜差全被上限吃掉了。
+      ambientRef.current.intensity = sceneCfg.indoor
+        ? 0.62 + (0.9 - 0.62) * (1 - n)
+        : ambient;
+      // 室内不做夜间偏蓝：石墙在蓝光下会整片发紫，看不出是石头
+      ambientRef.current.color.copy(
+        sceneCfg.indoor ? tmp.ambient.set('#e8e2d6') : tmp.ambient.set('#ffffff').lerp(tmp.nvidiaAmbient, n),
+      );
     }
     if (hemiRef.current) {
-      hemiRef.current.intensity = 0.45 + (0.82 - 0.45) * n;
-      hemiRef.current.color.copy(tmp.hemiSky.set('#dff3ff').lerp(tmp.nvidiaHemiSky, n));
-      hemiRef.current.groundColor.copy(tmp.hemiGround.set('#55753b').lerp(tmp.nvidiaHemiGround, n));
+      // 夜里半球光要比白天弱（原来 0.82 比白天 0.45 还亮，等于给夜景补了一层顶光）
+      // 室内例外：穹顶会挡住天光，全靠半球光把石墙从纯黑里捞出来
+      hemiRef.current.intensity = sceneCfg.indoor
+        ? 0.68 + 0.22 * (1 - n)
+        : 0.45 + (0.52 - 0.45) * n;
+      hemiRef.current.color.copy(tmp.hemiSky.set(sceneCfg.indoor ? '#cfd8e6' : '#dff3ff').lerp(tmp.nvidiaHemiSky, n));
+      hemiRef.current.groundColor.copy(tmp.hemiGround.set(sceneCfg.indoor ? '#4a5058' : '#55753b').lerp(tmp.nvidiaHemiGround, n));
     }
     if (dirRef.current) {
-      dirRef.current.intensity = day.directionalIntensity + (night.directionalIntensity - day.directionalIntensity) * n;
+      dirRef.current.intensity = (day.directionalIntensity + (night.directionalIntensity - day.directionalIntensity) * n) * sceneCfg.light.directional;
       dirRef.current.color.copy(tmp.sun.set('#fff5e0').lerp(tmp.nvidiaSun, n));
       // 太阳/月亮方位随昼夜轻微移动
       dirRef.current.position.set(5 - n * 7, 8 + n * 2, 3 - n * 5);
     }
     if (fireRef.current) {
-      // 篝火光在夜里更亮，且带轻微闪烁
-      const flicker = 0.86 + Math.sin(clock.elapsedTime * 11) * 0.07 + Math.sin(clock.elapsedTime * 23 + 1.7) * 0.07;
+      // 篝火光在夜里更亮；减弱动态时取消闪烁（火仍亮，只是不闪）
+      const flicker = prefersReducedMotion ? 1 : 0.86 + Math.sin(clock.elapsedTime * 11) * 0.07 + Math.sin(clock.elapsedTime * 23 + 1.7) * 0.07;
       fireRef.current.intensity = (day.firelightIntensity + (night.firelightIntensity - day.firelightIntensity) * n) * flicker;
     }
     // 雾：颜色/距离随昼夜插值（数值来自光照预设，照顾远山景深）
     if (!fogRef.current) fogRef.current = (scene.fog as THREE.Fog) ?? null;
     if (fogRef.current) {
-      fogRef.current.color.copy(tmp.fog.set('#c8e6f0').lerp(tmp.nvidiaFog, n));
-      fogRef.current.near = presets.day.fogNear + (presets.night.fogNear - presets.day.fogNear) * n;
-      fogRef.current.far = presets.day.fogFar + (presets.night.fogFar - presets.day.fogFar) * n;
+      const fogCfg = sceneCfg.fog;
+      fogRef.current.color.copy(tmp.fog.set(fogCfg.day).lerp(tmp.nvidiaFog.set(fogCfg.night), n));
+      fogRef.current.near = fogCfg.dayNear + (fogCfg.nightNear - fogCfg.dayNear) * n;
+      fogRef.current.far = fogCfg.dayFar + (fogCfg.nightFar - fogCfg.dayFar) * n;
     }
   });
 
@@ -276,10 +309,18 @@ export const WorldEffects: React.FC<WorldEffectsProps> = ({ isNight, effectLevel
 
   return (
     <>
-      <SkyDome nightAmountRef={nightAmountRef} />
-      <Stars nightAmountRef={nightAmountRef} />
-      <MoonSun nightAmountRef={nightAmountRef} />
-      <Clouds />
+      <SkyDome
+        nightAmountRef={nightAmountRef}
+        day={{ top: sceneCfg.sky.dayTop, bottom: sceneCfg.sky.dayBottom }}
+        night={{ top: sceneCfg.sky.nightTop, bottom: sceneCfg.sky.nightBottom }}
+      />
+      {!sceneCfg.indoor && (
+        <>
+          <Stars nightAmountRef={nightAmountRef} />
+          <MoonSun nightAmountRef={nightAmountRef} />
+          <Clouds />
+        </>
+      )}
 
       <ambientLight ref={ambientRef} intensity={preset.ambientIntensity} />
       <hemisphereLight ref={hemiRef} intensity={0.45} />
@@ -301,12 +342,12 @@ export const WorldEffects: React.FC<WorldEffectsProps> = ({ isNight, effectLevel
       />
 
       {/* 篝火点光源（带闪烁） */}
-      <pointLight ref={fireRef} position={[0, 1.2, 0]} intensity={preset.firelightIntensity} color={preset.firelightColor} distance={12} decay={2} />
+      <pointLight ref={fireRef} position={[0, 1.2, 0]} intensity={preset.firelightIntensity} color={sceneCfg.light.fire} distance={16} decay={2} />
 
       {/* 雾由 VoxelRpgRoom 挂载？——本组件负责创建并逐帧插值 */}
-      <fog attach="fog" args={[preset.fogColor, preset.fogNear, preset.fogFar]} />
+      <fog attach="fog" args={[sceneCfg.fog.day, sceneCfg.fog.dayNear, sceneCfg.fog.dayFar]} />
 
-      {isNight && effectLevel !== 'subtle' && <Fireflies count={fireflyCount} nightAmountRef={nightAmountRef} />}
+      {sceneCfg.fireflies && isNight && effectLevel !== 'subtle' && <Fireflies count={fireflyCount} nightAmountRef={nightAmountRef} />}
     </>
   );
 };

@@ -16,13 +16,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm test
       - run: npm run build
 
   e2e:
     runs-on: ubuntu-latest
-    # E2E 目前时序稳定性不足，允许失败观察，稳定后改为必需门禁
-    continue-on-error: true
+    timeout-minutes: 30
+    # 2026-10-25：spec 已对齐当前 UI（布局收进「更多」菜单、首页入口改「联机」），
+    # 本地连续两轮 `npx playwright test` 6/6 全绿且首跑无 flake（3.5 分钟），此 job 改为必需门禁：失败即阻断合并
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,5 +38,10 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
+          # 配置里 reporter 只有 list，失败产物实际落在 test-results/（trace+截图+error-context）；
+          # 只写 playwright-report/ 会让这一步在失败时因目录不存在而报错、拿不到任何现场
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: warn
           retention-days: 7

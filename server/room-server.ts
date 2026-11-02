@@ -11,9 +11,17 @@ const CONFIG_SHARE_PATH = path.join(
 );
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes, createHash } from 'crypto';
-import { RoomManager, RoomDiscovery } from './room-manager.js';
+import {
+  RoomManager,
+  RoomDiscovery,
+  MAX_INBOUND_MESSAGE_BYTES,
+  createMessageTooLargeReply,
+  resolveDisconnectGraceMs,
+  resolveUnstableAfterMs,
+} from './room-manager.js';
 import { buildGameStateForViewer, getViewerFromGameState } from './visibility.js';
 import { createBotSession } from './bots.js';
+import { createAttemptLimiter, generateShareCode, isValidShareCode, maskShareCode } from './share-guard.js';
 
 function generateSessionToken(): string {
   return randomBytes(32).toString('hex');
@@ -133,6 +141,8 @@ interface ClientConnection {
   sessionTokenHash: string;
   connectedAt: number;
   isAlive: boolean;
+  /** 最近一次收到该连接入站消息（应用层消息或心跳 pong）的时刻 */
+  lastSeenAt: number;
 }
 
 const wsConnections: Map<string, ClientConnection> = new Map();
@@ -142,6 +152,8 @@ const roomRoleAssignments: Map<string, Map<string, any>> = new Map();
 const roomRoleAcks: Map<string, Set<string>> = new Map();
 const disconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 const playerSessionTokens: Map<string, string> = new Map();
+// 房主侧「连接不稳」上一次广播出去的值：connectionKey -> boolean，只在翻转时推送
+const unstableBroadcastFlags: Map<string, boolean> = new Map();
 interface ActionRecord {
   playerId: string;
   actionType: string;
@@ -152,8 +164,15 @@ interface ActionRecord {
 const processedActions: Map<string, { records: Map<string, ActionRecord>; order: string[] }> = new Map();
 const lastClientSeqByPlayer: Map<string, number> = new Map();
 const advisorRequestsInFlight: Set<string> = new Set();
-const DISCONNECT_GRACE_MS = 10000;
+// 宽限期可由房主用 ROOM_DISCONNECT_GRACE_MS 覆盖（非法值回退 60000），
+// 必须长于客户端重连计划（RECONNECT_DELAYS_MS 合计 55 秒）
+const DISCONNECT_GRACE_MS = resolveDisconnectGraceMs(process.env.ROOM_DISCONNECT_GRACE_MS);
+// 静默超过宽限期的一半，房主 UI 提示「连接不稳」——纯可见性，不影响对局推进
+const UNSTABLE_AFTER_MS = resolveUnstableAfterMs(DISCONNECT_GRACE_MS);
 const MAX_ACTION_HISTORY_PER_ROOM = 5000;
+let oversizedInboundCount = 0;
+let oversizedOutboundCount = 0;
+const oversizedOutboundLogged: Set<string> = new Set();
 const ACTIVE_ROOM_MESSAGE_TYPES = new Set([
   'PING',
   'PLAYER_ACTION',
@@ -221,6 +240,7 @@ function clearPlayerRuntimeState(roomId: string, playerId: string) {
   lastClientSeqByPlayer.delete(getPlayerSeqKey(roomId, playerId));
   advisorRequestsInFlight.delete(getConnectionKey(roomId, playerId));
   playerSessionTokens.delete(getConnectionKey(roomId, playerId));
+  unstableBroadcastFlags.delete(getConnectionKey(roomId, playerId));
 }
 
 function clearRoomRuntimeState(roomId: string) {
@@ -229,6 +249,9 @@ function clearRoomRuntimeState(roomId: string) {
   roomRoleAssignments.delete(roomId);
   roomRoleAcks.delete(roomId);
   processedActions.delete(roomId);
+  Array.from(unstableBroadcastFlags.keys())
+    .filter(key => key.startsWith(`${roomId}:`))
+    .forEach(key => unstableBroadcastFlags.delete(key));
   Array.from(advisorRequestsInFlight)
     .filter(key => key.startsWith(`${roomId}:`))
     .forEach(key => advisorRequestsInFlight.delete(key));
@@ -250,13 +273,28 @@ function getRoomConnections(roomId: string): ClientConnection[] {
 
 function sendToConnection(conn: ClientConnection, message: any) {
   if (conn.ws.readyState === WebSocket.OPEN) {
-    conn.ws.send(JSON.stringify(message));
+    conn.ws.send(serializeOutbound(conn.roomId, message));
   }
+}
+
+function serializeOutbound(roomId: string, message: any): string {
+  const data = JSON.stringify(message);
+  // 出站没有硬上限，但全量状态一旦超过入站上限，客人回一条大消息就会被自己的
+  // 规则挡住：这里只记一条日志 + 计数，作为将来做 delta 同步的依据，不在此实现
+  if (data.length > MAX_INBOUND_MESSAGE_BYTES) {
+    oversizedOutboundCount += 1;
+    const label = `${message.type}@${roomId}`;
+    if (!oversizedOutboundLogged.has(label)) {
+      oversizedOutboundLogged.add(label);
+      console.warn(`[Room Server] Outbound ${String(message.type)} for room ${roomId} is ${data.length} bytes, over ${MAX_INBOUND_MESSAGE_BYTES} (累计 ${oversizedOutboundCount} 次过大广播，建议改用增量同步)`);
+    }
+  }
+  return data;
 }
 
 function broadcastToRoom(roomId: string, message: any, excludePlayerId?: string) {
     const connections = getRoomConnections(roomId);
-    const data = JSON.stringify(message);
+    const data = serializeOutbound(roomId, message);
     for (const conn of connections) {
         if (excludePlayerId && conn.playerId === excludePlayerId) continue;
         if (conn.ws.readyState === WebSocket.OPEN) {
@@ -300,6 +338,9 @@ function serializeRoom(room: any) {
       isReady: p.isReady,
       isConnected: p.isConnected,
       hasUsedAISuggestion: p.hasUsedAISuggestion,
+      // 房主侧可见性用：客人最近一次入站时刻与「静默已超过宽限期一半」的判定
+      lastSeenAt: p.lastSeenAt ?? null,
+      isUnstable: !!p.isUnstable,
     })),
     maxPlayers: room.maxPlayers,
     presetKey: room.presetKey,
@@ -308,6 +349,51 @@ function serializeRoom(room: any) {
     createdAt: room.createdAt,
     updatedAt: room.updatedAt,
   };
+}
+
+/** 记录「听到某个座位说话了」：入站消息与心跳 pong 都算，纯可见性，不影响对局 */
+function markPlayerSeen(roomId: string, playerId: string, at: number = Date.now()) {
+  const conn = wsConnections.get(getConnectionKey(roomId, playerId));
+  if (conn) conn.lastSeenAt = at;
+  const player = roomManager.getRoom(roomId)?.players.get(playerId);
+  if (player) {
+    player.lastSeenAt = at;
+    player.isUnstable = false;
+  }
+}
+
+/**
+ * 「连接不稳」判定与广播：客人静默时长超过宽限期的一半（默认 60000/2=30000ms）时
+ * 提示房主，真正断线时仍走原有 PLAYER_DISCONNECTED 文案。
+ *
+ * 之所以是可靠信号：服务端每 30 秒 ping 一次、浏览器在网络层自动回 pong，pong 也计入
+ * lastSeenAt，所以健康座位的静默时长永远达不到阈值；而手机锁屏/信号丢失时，
+ * 座位会在「约 30 秒静默」被标成不稳，比心跳判定半开连接并触发 close（约 60 秒）
+ * 早整整一个心跳周期。
+ * 只在结果翻转时把房间状态推给房主，避免客人断线时房主 UI 一片空白。
+ */
+function sweepUnstableConnections() {
+  const now = Date.now();
+  const dirtyRoomIds = new Set<string>();
+  wsConnections.forEach(conn => {
+    if (conn.ws.readyState !== WebSocket.OPEN) return;
+    const unstable = now - conn.lastSeenAt >= UNSTABLE_AFTER_MS;
+    const player = roomManager.getRoom(conn.roomId)?.players.get(conn.playerId);
+    if (player) player.isUnstable = unstable;
+    const flagKey = getConnectionKey(conn.roomId, conn.playerId);
+    if (unstableBroadcastFlags.get(flagKey) !== unstable) {
+      unstableBroadcastFlags.set(flagKey, unstable);
+      dirtyRoomIds.add(conn.roomId);
+    }
+  });
+
+  for (const roomId of dirtyRoomIds) {
+    const room = roomManager.getRoom(roomId);
+    if (!room) continue;
+    const hostConn = wsConnections.get(getConnectionKey(roomId, room.hostPlayerId));
+    // 只推房主：客人看到的是原有断线文案，不需要这份额外可见性
+    if (hostConn) sendToConnection(hostConn, { type: 'STATE_UPDATE', room: serializeRoom(room) });
+  }
 }
 
 function handleWsMessage(conn: ClientConnection, data: any) {
@@ -691,26 +777,64 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     }
 
     // ── 配置同步(局域网):房主发布快照,成员拉取 ─────────────────
+    // 配置分享口令：快照里可能含明文 API Key，因此 GET 必须带房主给出的口令，
+    // 并对同 IP 的错误尝试做锁定 —— 「同 Wi-Fi 都是朋友」在校园/公共网络不成立。
     if (pathname === '/api/config/share' && method === 'POST') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      const publishLockedMs = publishShareLimiter.lockRemainingMs(ip);
+      if (publishLockedMs > 0) {
+        return writeJson(res, 429, { error: `发布尝试过于频繁，请 ${Math.ceil(publishLockedMs / 1000)} 秒后再试` }, req);
+      }
       const { data: body, oversized } = await parseBody(req);
       if (oversized) return writeJson(res, 413, { error: '配置快照过大' }, req);
+      // 覆盖已有快照必须出示当前口令：否则同网段任意设备都能投毒 baseUrl，
+      // 让后续拉取者把 API Key 发到攻击者端点。首次发布（尚无快照）仍在局域网信任范围内。
+      if (activeShareCode) {
+        const supplied = (typeof body?.previousCode === 'string' ? body.previousCode : url.searchParams.get('code') || '').trim();
+        if (supplied !== activeShareCode) {
+          publishShareLimiter.recordFailure(ip);
+          console.warn(`[Room Server] 拒绝一次配置发布（口令缺失或错误）来自 ${ip}`);
+          return writeJson(res, 403, { error: '覆盖已有快照需要当前口令；口令遗失时可删除 server/config-share.json 并重启房间服务重置' }, req);
+        }
+      }
       if (!body || typeof body !== 'object' || typeof body.config !== 'object') {
         return writeJson(res, 400, { error: '缺少 config 字段' }, req);
       }
-      const snapshot = {
+      const snapshot: {
+        config: unknown;
+        includesApiKeys: boolean;
+        publishedAt: number;
+        publishedBy: string;
+        shareCode?: string;
+      } = {
         config: body.config,
         includesApiKeys: !!body.includesApiKeys,
         publishedAt: Date.now(),
         publishedBy: String(body.publishedBy || 'host').slice(0, 20),
       };
+      snapshot.shareCode = generateShareCode();
+      activeShareCode = snapshot.shareCode;
       writeFileSync(CONFIG_SHARE_PATH, JSON.stringify(snapshot, null, 2));
-      return writeJson(res, 200, { ok: true, publishedAt: snapshot.publishedAt }, req);
+      console.log(`[Room Server] 配置快照已发布（含密钥：${snapshot.includesApiKeys ? '是' : '否'}）。口令：${maskShareCode(snapshot.shareCode)}（完整口令已返回给发布方）`);
+      return writeJson(res, 200, { ok: true, publishedAt: snapshot.publishedAt, shareCode: snapshot.shareCode }, req);
     }
 
     if (pathname === '/api/config/share' && method === 'GET') {
       if (!existsSync(CONFIG_SHARE_PATH)) {
         return writeJson(res, 404, { error: '房间服务上暂无共享配置' }, req);
       }
+      const ip = req.socket.remoteAddress || 'unknown';
+      const lockedMs = fetchShareLimiter.lockRemainingMs(ip);
+      if (lockedMs > 0) {
+        return writeJson(res, 429, { error: `口令连续错误过多，请 ${Math.ceil(lockedMs / 1000)} 秒后再试` }, req);
+      }
+      const supplied = (url.searchParams.get('code') || '').trim();
+      if (!activeShareCode || !isValidShareCode(supplied) || supplied !== activeShareCode) {
+        fetchShareLimiter.recordFailure(ip);
+        console.warn(`[Room Server] 拒绝一次配置拉取（口令缺失或错误）来自 ${ip}`);
+        return writeJson(res, 401, { error: '需要房主给出的 10 位分享口令' }, req);
+      }
+      fetchShareLimiter.clear(ip);
       try {
         const snapshot = JSON.parse(readFileSync(CONFIG_SHARE_PATH, 'utf8'));
         return writeJson(res, 200, snapshot, req);
@@ -741,7 +865,15 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
       if (!roomName || !nickname) return writeJson(res, 400, { error: '需要房间名和昵称' }, req);
       if (nickname.length > 5) return writeJson(res, 400, { error: '昵称最多5个字符' }, req);
       if (roomName.length > 20) return writeJson(res, 400, { error: '房间名最多20个字符' }, req);
-      const room = roomManager.createRoom(hostIp || req.socket.remoteAddress || '127.0.0.1', roomName, nickname, presetKey, maxPlayers || 12, password);
+      const created = roomManager.createRoom(hostIp || req.socket.remoteAddress || '127.0.0.1', roomName, nickname, presetKey, maxPlayers || 12, password);
+      if ('error' in created) {
+        return writeJson(res, 429, {
+          error: created.error === 'ROOM_LIMIT_PER_IP'
+            ? '同一 IP 的建房数量已达上限，请等旧房间清理后再试'
+            : '房间总数已达上限，请稍后再试',
+        }, req);
+      }
+      const room = created.room;
       const sessionToken = generateSessionToken();
       const tokenHash = hashToken(sessionToken);
       const hostPlayer = room.players.get(room.hostPlayerId);
@@ -795,18 +927,47 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
   }
 });
 
+// 口令只保存在内存与快照文件里：房主重新发布即轮换，旧口令自动作废
+let activeShareCode: string | null = null;
+// 拉取(GET)与发布(POST)各自的按 IP 失败锁定；发布限速防的是同网段设备反复试探覆盖
+const fetchShareLimiter = createAttemptLimiter(8, 60_000);
+const publishShareLimiter = createAttemptLimiter(5, 60_000);
+try {
+  if (existsSync(CONFIG_SHARE_PATH)) {
+    const existing = JSON.parse(readFileSync(CONFIG_SHARE_PATH, 'utf8'));
+    if (typeof existing?.shareCode === 'string') activeShareCode = existing.shareCode;
+  }
+} catch { /* 快照损坏时由 GET 分支自行报错 */ }
+
 const wss = new WebSocketServer({
   server: httpServer,
   path: '/api/ws',
   // 浏览器发起的 WS 握手必带 Origin；拒绝公网来源，防跨站 WebSocket 劫持。
   // 无 Origin 的非浏览器客户端（curl、测试脚本）放行。
-  verifyClient: (info) => {
+  verifyClient: (info: { origin?: string; req: IncomingMessage; secure: boolean }) => {
     const rawOrigin = info.req.headers.origin;
     const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
     if (!origin) return true;
     return isAllowedWsOrigin(origin);
   },
 });
+
+// 端口被占/绑定失败时给出可读提示，避免未捕获的 'error' 事件把进程直接炸掉（实测 EADDRINUSE 会崩）。
+let portConflictReported = false;
+const reportServerError = (err: NodeJS.ErrnoException | Error) => {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  if (code === 'EADDRINUSE') {
+    // wss 与 httpServer 会对同一次绑定失败各报一次，只提示一次并退出，不留僵尸进程
+    if (portConflictReported) return;
+    portConflictReported = true;
+    console.error(`[Room Server] 端口 ${PORT} 已被占用，房间服务未能启动。请关闭另一个实例（或设置 ROOM_SERVER_PORT 换端口）后重试。`);
+    setTimeout(() => process.exit(1), 50);
+    return;
+  }
+  console.error('[Room Server] 服务错误：', code || err?.message || err);
+};
+wss.on('error', reportServerError);
+httpServer.on('error', reportServerError);
 
 const AUTH_TIMEOUT_MS = 5000;
 
@@ -857,8 +1018,11 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
 
   ws.on('message', (raw: Buffer) => {
     try {
-      if (raw.length > 1024 * 1024) {
-        console.warn(`[Room Server] Oversized message from unauthenticated ${authKey}: ${raw.length} bytes`);
+      if (raw.length > MAX_INBOUND_MESSAGE_BYTES) {
+        oversizedInboundCount += 1;
+        console.warn(`[Room Server] Oversized message from unauthenticated ${authKey}: ${raw.length} bytes (dropped, 累计 ${oversizedInboundCount} 条)`);
+        // 不能静默丢弃：发送方需要知道自己那条没送到
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(createMessageTooLargeReply(raw.length)));
         return;
       }
       const data = JSON.parse(raw.toString());
@@ -905,10 +1069,16 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
           sessionTokenHash: tokenHash,
           connectedAt: Date.now(),
           isAlive: true,
+          lastSeenAt: Date.now(),
         };
+        unstableBroadcastFlags.set(connectionKey, false);
         wsConnections.set(connectionKey, conn);
+        markPlayerSeen(roomId, playerId, conn.lastSeenAt);
         // 协议层 pong 由浏览器/webview 自动回复，用于服务端心跳存活判断
-        ws.on('pong', () => { conn.isAlive = true; });
+        ws.on('pong', () => {
+          conn.isAlive = true;
+          markPlayerSeen(roomId, playerId);
+        });
         roomManager.touchRoom(roomId);
 
         const isHost = room.hostPlayerId === playerId;
@@ -960,8 +1130,13 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
         ws.removeAllListeners('message');
         ws.on('message', (raw: Buffer) => {
           try {
-            if (raw.length > 1024 * 1024) {
-              console.warn(`[Room Server] Oversized message from ${connectionKey}: ${raw.length} bytes`);
+            // 收到任何入站帧都说明这个座位还在，刷新「最近一次听到」的时刻
+            markPlayerSeen(roomId, playerId);
+            if (raw.length > MAX_INBOUND_MESSAGE_BYTES) {
+              oversizedInboundCount += 1;
+              console.warn(`[Room Server] Oversized message from ${connectionKey}: ${raw.length} bytes (dropped, 累计 ${oversizedInboundCount} 条)`);
+              // 静默丢弃等于把发送方的操作吃掉：回一条结构化错误，让客户端能提示玩家
+              sendToConnection(conn, createMessageTooLargeReply(raw.length));
               return;
             }
             const data = JSON.parse(raw.toString());
@@ -974,6 +1149,7 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
         ws.on('close', () => {
           if (wsConnections.get(connectionKey) !== conn) return;
           wsConnections.delete(connectionKey);
+          unstableBroadcastFlags.delete(connectionKey);
           console.log(`[Room Server] WS disconnected: ${connectionKey}. Total: ${wsConnections.size}`);
 
           const currentRoom = roomManager.getRoom(roomId);
@@ -985,6 +1161,8 @@ wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
           const disconnectedRoomPlayer = currentRoom.players.get(playerId);
           if (disconnectedRoomPlayer) {
             disconnectedRoomPlayer.isConnected = false;
+            // 真正的断线交回原有断线文案，「连接不稳」标记到此为止
+            disconnectedRoomPlayer.isUnstable = false;
             currentRoom.updatedAt = Date.now();
             broadcastToRoom(roomId, { type: 'STATE_UPDATE', room: serializeRoom(currentRoom) });
             broadcastToRoom(roomId, {
@@ -1083,9 +1261,14 @@ setInterval(() => {
   });
 }, HEARTBEAT_INTERVAL_MS);
 
+// 房主侧「连接不稳」可见性扫描：只读连接时刻 + 推房间状态，不参与对局推进
+const UNSTABLE_SWEEP_INTERVAL_MS = 5000;
+setInterval(sweepUnstableConnections, UNSTABLE_SWEEP_INTERVAL_MS);
+
 httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[Room Server] Running on http://0.0.0.0:${PORT}`);
     console.log(`[Room Server] WebSocket endpoint: ws://0.0.0.0:${PORT}/api/ws`);
+    console.log(`[Room Server] Disconnect grace: ${DISCONNECT_GRACE_MS}ms（ROOM_DISCONNECT_GRACE_MS 可覆盖），静默 ${UNSTABLE_AFTER_MS}ms 起向房主提示「连接不稳」`);
     console.log(`[Room Server] Starting mDNS broadcast: _ai-werewolf._tcp on port ${PORT}`);
     discovery.startBroadcast(roomManager);
     console.log(`[Room Server] Room discovery and multiplayer ready`);

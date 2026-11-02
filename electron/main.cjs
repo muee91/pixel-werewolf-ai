@@ -1,7 +1,7 @@
 // 方块狼人杀 · Mac 客户端主进程
 // 职责:窗口 + 内置站点(:3001,静态资源 + API 代理) + 编排房间服务(:3002)与 TTS 后端(:8000)。
 // 局域网玩家用浏览器打开 http://<本机IP>:3001 即可加入,零安装。
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, session, shell } = require('electron');
 const { spawn } = require('child_process');
 const edgeTts = require('./edge-tts.cjs');
 const http = require('http');
@@ -127,7 +127,14 @@ function serveStatic(req, res, pathname) {
         filePath = path.join(distDir, 'index.html'); // SPA 回退
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    // 缓存策略：index.html / SPA 回退一律 no-store，否则重装应用后窗口还拿着旧的入口脚本，
+    // 用户看到的是上一个版本的界面（换包不生效的元凶）。带 hash 的静态资源才允许长缓存。
+    const isHtml = ext === '.html';
+    const headers = {
+        'Content-Type': MIME[ext] || 'application/octet-stream',
+        'Cache-Control': isHtml ? 'no-store, must-revalidate' : 'public, max-age=31536000, immutable',
+    };
+    res.writeHead(200, headers);
     fs.createReadStream(filePath).pipe(res);
 }
 
@@ -158,12 +165,29 @@ function forwardLocalLlmGateway(req, res, target) {
                 Accept: req.headers.accept ?? 'application/json',
             },
         }, (proxyRes) => {
+            const contentType = proxyRes.headers['content-type'] ?? 'application/json';
+            // 流式必须边读边写。此前这里一律把响应收全再带 Content-Length 回给渲染进程，
+            // 于是本地模型（Ollama / LM Studio）在桌面客户端里永远是"最后一刻整包到达"，
+            // 字幕只能显示"正在思考"。与 vite.config.ts 的 loopback 转发是同一个坑。
+            if (contentType.includes('text/event-stream')) {
+                res.writeHead(proxyRes.statusCode || 502, {
+                    'Content-Type': contentType,
+                    'Cache-Control': 'no-cache, no-transform',
+                    'X-Accel-Buffering': 'no',
+                });
+                res.flushHeaders?.();
+                proxyRes.pipe(res);
+                proxyRes.on('error', () => res.end());
+                // 渲染进程关页面/取消请求：上游也要停，别让它继续生成
+                req.on('close', () => proxyRes.destroy());
+                return;
+            }
             const respBuf = [];
             proxyRes.on('data', c => respBuf.push(c));
             proxyRes.on('end', () => {
                 const buf = Buffer.concat(respBuf);
                 res.writeHead(proxyRes.statusCode || 502, {
-                    'Content-Type': proxyRes.headers['content-type'] ?? 'application/json',
+                    'Content-Type': contentType,
                     'Content-Length': String(buf.length),
                 });
                 res.end(buf);
@@ -178,20 +202,31 @@ function forwardLocalLlmGateway(req, res, target) {
     });
 }
 
+// 与 server/llm-gateway-target.ts 同一口径（CJS 无法直接 import，单测做漂移断言）：
+// 网关只转发 loopback 的本地 LLM API 路径，防止局域网客人借房主身份
+// 触达本机其它 loopback-only 服务（如 MCP hub 的 /decision、各类本地管理面板）。
+const GATEWAY_EXACT_PATHS = new Set([
+    '/chat/completions', '/completions', '/models', '/embeddings',
+    '/api/tags', '/api/chat', '/api/generate', '/api/show', '/api/version',
+]);
+
 function handleLocalLlmGateway(req, res) {
     const url = new URL(req.url, `http://127.0.0.1`);
     const raw = url.searchParams.get('target') || '';
     let target = null;
     try {
         const parsed = new URL(raw);
-        if ((parsed.protocol === 'http:' || parsed.protocol === 'https:')
-            && ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)) {
+        const isLoopback = (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+            && ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname);
+        const pathname = parsed.pathname.replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/';
+        const isLlmApiPath = pathname.startsWith('/v1/') || GATEWAY_EXACT_PATHS.has(pathname);
+        if (isLoopback && isLlmApiPath) {
             target = parsed;
         }
     } catch { /* 保持 null */ }
     if (!target) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'target 必须是宿主机 loopback 地址' }));
+        res.end(JSON.stringify({ error: 'target 必须是宿主机 loopback 的本地 LLM API 地址（路径限 /v1/*、/chat/completions、/models 等）' }));
         return;
     }
     forwardLocalLlmGateway(req, res, target);
@@ -347,6 +382,8 @@ function startSiteServer(onReady) {
 
 // ── 窗口 ───────────────────────────────────────────────────
 let mainWindow = null;
+/** 本次窗口加载完成的时间戳，用来判断磁盘上的 dist 是否已经是更新的版本 */
+let windowLoadedAt = 0;
 
 function createWindow(loadUrl) {
     mainWindow = new BrowserWindow({
@@ -367,6 +404,7 @@ function createWindow(loadUrl) {
     mainWindow.loadURL(loadUrl || `http://127.0.0.1:${APP_PORT}`);
     // 把安装路径告诉前端:邀请提示词里用绝对路径起桥,目标会话无需到处找项目
     mainWindow.webContents.on('did-finish-load', () => {
+        windowLoadedAt = Date.now();
         mainWindow?.webContents.executeJavaScript(
             `window.__WEREWOLF_PROJECT_ROOT__ = ${JSON.stringify(resourcesDir)};`,
         ).catch(() => {});
@@ -379,15 +417,25 @@ if (!gotLock) {
     app.quit();
 } else {
     app.on('second-instance', () => {
-        if (mainWindow) {
-            if (mainWindow.isMinimized()) mainWindow.restore();
-            mainWindow.focus();
-        }
+        if (!mainWindow) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+        // 覆盖安装是新版本时，旧窗口还在跑上一个版本的 JS（单实例锁让"再点一次图标"只变成聚焦）。
+        // 只有当磁盘上的 index.html 比本次窗口加载时间更新时才强制重载，避免无谓地打断在玩的对局。
+        try {
+            const builtAt = fs.statSync(path.join(distDir, 'index.html')).mtimeMs;
+            if (builtAt > windowLoadedAt) mainWindow.webContents.reloadIgnoringCache();
+        } catch { /* 忽略：dist 缺失时保持现状 */ }
     });
 
     app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
     app.whenReady().then(() => {
+        // 旧版本把 index.html 缓进了磁盘缓存，换包后窗口仍加载上一个版本的入口脚本
+        // （用户反馈"改完还是老界面"）。启动时清一次 HTTP 缓存，配合 no-store 头彻底断根。
+        if (!isDev) {
+            session.defaultSession.clearCache().catch(() => {});
+        }
         if (isDev) {
             // 开发模式:复用 vite dev(vite 插件会拉起房间/TTS),仅开窗口
             createWindow();

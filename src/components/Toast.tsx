@@ -4,30 +4,28 @@ import { useAtom } from 'jotai';
 import { clsx } from 'clsx';
 import { toastsAtom, type ToastType } from '../atoms';
 
-const typeConfig: Record<ToastType, { icon: string; bg: string; border: string; ring: string }> = {
+// 纸面 + 墨描边 + 硬阴影的应用内提示，与 ConfirmDialogHost 同一语言。
+// 类型差异只由色块徽章承载：徽章实底色都按对比度铁律配字（火把/黎明/绿宝石压墨字，红石深压纸字）。
+const typeConfig: Record<ToastType, { icon: string; chipBg: string; chipFg: string }> = {
     success: {
         icon: '✓',
-        bg: 'bg-th-god/80 backdrop-blur-lg',
-        border: 'border-th-god/50',
-        ring: 'ring-th-god/30',
+        chipBg: 'var(--voxel-emerald)',
+        chipFg: 'var(--voxel-ink)',
     },
     error: {
         icon: '✕',
-        bg: 'bg-th-accent2/80 backdrop-blur-lg',
-        border: 'border-th-accent2/50',
-        ring: 'ring-th-accent2/30',
+        chipBg: 'var(--voxel-redstone-deep)',
+        chipFg: 'var(--voxel-solid-white)',
     },
     info: {
         icon: 'ℹ',
-        bg: 'bg-th-accent1/80 backdrop-blur-lg',
-        border: 'border-th-accent1/50',
-        ring: 'ring-th-accent1/30',
+        chipBg: 'var(--voxel-torch)',
+        chipFg: 'var(--voxel-ink)',
     },
     warning: {
         icon: '⚠',
-        bg: 'bg-th-accent3/80 backdrop-blur-lg',
-        border: 'border-th-accent3/50',
-        ring: 'ring-th-accent3/30',
+        chipBg: 'var(--voxel-dawn)',
+        chipFg: 'var(--voxel-ink)',
     },
 };
 
@@ -46,21 +44,24 @@ const ToastContainer = () => {
                         className={clsx(
                             'pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-none border-[3px] border-[var(--voxel-ink)] shadow-[4px_4px_0_var(--voxel-ink)]',
                             'animate-[slideDown_0.3s_ease-out]',
-                            config.bg,
-                            config.border,
-                            config.ring,
                             'min-w-[280px] max-w-[420px]'
                         )}
+                        style={{ background: 'var(--voxel-paper)' }}
                     >
-                        <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-sm font-bold text-white bg-white/10">
+                        <span
+                            className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-none border-2 border-[var(--voxel-ink)] text-sm font-bold"
+                            style={{ background: config.chipBg, color: config.chipFg }}
+                        >
                             {config.icon}
                         </span>
-                        <span className="flex-1 text-sm text-white/90 font-medium leading-snug">
+                        <span className="flex-1 text-sm font-medium leading-snug" style={{ color: 'var(--voxel-ink)' }}>
                             {toast.message}
                         </span>
                         <button
                             onClick={() => setToasts((prev) => prev.filter(t => t.id !== toast.id))}
-                            className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-white/50 hover:text-white/90 hover:bg-white/10 transition-all text-xs"
+                            className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-none transition-opacity hover:opacity-60 text-xs"
+                            style={{ color: 'var(--voxel-ink-soft)' }}
+                            aria-label="关闭提示"
                         >
                             ✕
                         </button>

@@ -54,7 +54,8 @@ export const canPlayerUseDeathAction = (
     wolfKingCanShootWhenPoisoned: boolean = false
 ) => {
     if (player.role === Role.WOLF_KING) {
-        // 标准狼王守卫板：被毒（或中毒连锁）死亡不能开枪，与猎人同规
+        // 狼王被枪杀（DEAD_SHOOT）仍可回枪；被毒默认不能开枪
+        // （猎人被枪杀不可开枪，此为两职差异——见下方 HUNTER 分支的 eligibleDeath 列表）
         const eligibleDeath = [
             PlayerStatus.DEAD_VOTE,
             PlayerStatus.DEAD_NIGHT,

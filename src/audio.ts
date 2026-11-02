@@ -1,4 +1,13 @@
 import { get, set, keys } from 'idb-keyval';
+import { getPace } from './hooks/engine/pacing';
+
+// TTS 请求超时：后端不存在或挂起时必须快速失败回落到字幕，
+// 否则玩家会看到对局卡在朗读上不动。
+// 20s 的依据：Edge TTS 已迁到 api.msedgeservices.com，进程内第一条连接要重新做
+// DNS + TLS 握手，实测冷启动 11.8s、复用连接 6.7s。原 15s 会把冷启动那一条判死。
+const TTS_FETCH_TIMEOUT_MS = 20000;
+// 前一段播放未释放时的最长排队时间（防止一次挂死的播放饿死整条队列）
+const PLAYBACK_LOCK_WAIT_MS = 60000;
 import { TTSPreset, TTSFineTune } from './types';
 
 import { RemoteServerConfig } from './atoms';
@@ -84,7 +93,8 @@ export class AudioService {
                     voice: voiceId || 'zh-CN-XiaoxiaoNeural',
                     rate,
                     pitch
-                })
+                }),
+                signal: AbortSignal.timeout(TTS_FETCH_TIMEOUT_MS)
             });
 
             if (response.ok) return await response.blob();
@@ -165,9 +175,9 @@ export class AudioService {
 
         this.stop();
 
-        await previousLock;
+        await Promise.race([previousLock, new Promise(r => setTimeout(r, Math.max(5000, Math.round(PLAYBACK_LOCK_WAIT_MS / Math.max(1, getPace())))))]);
 
-        await new Promise(r => setTimeout(r, 80));
+        await new Promise(r => setTimeout(r, Math.round(80 / Math.max(1, getPace()))));
 
         try {
             const myId = this.playbackId;
@@ -207,8 +217,22 @@ export class AudioService {
                 const url = URL.createObjectURL(audioBlob!);
                 this.currentBlobUrl = url;
                 const audio = new Audio(url);
-                audio.playbackRate = 1.0;
+                audio.playbackRate = Math.min(4, Math.max(0.5, playbackSpeed * getPace()));
                 this.currentAudio = audio;
+                // 看门狗：WebView 后台挂起等原因让 onended/onerror 都不触发时主动放行，
+                // 避免房主端与引擎主循环永久等待一段永远不会播完的语音。
+                window.setTimeout(() => {
+                    if (this.currentAudio !== audio) return;
+                    console.warn('TTS 播放超时未结束（可能被系统挂起），已跳过本段语音。');
+                    try { audio.pause(); } catch { /* 已停止 */ }
+                    URL.revokeObjectURL(url);
+                    if (this.currentBlobUrl === url) this.currentBlobUrl = null;
+                    this.currentAudio = null;
+                    const settle = this.currentResolve;
+                    this.currentResolve = null;
+                    if (onPlayEnd) onPlayEnd();
+                    if (settle) settle(); else resolve(false);
+                }, Math.max(8000, Math.round((text.length * 400 + 20000) / Math.max(1, getPace()))));
                 this.currentResolve = () => resolve(false);
 
                 audio.onplay = () => {

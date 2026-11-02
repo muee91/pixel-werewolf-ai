@@ -6,6 +6,7 @@ import { spawn, execSync } from 'child_process';
 import { existsSync, writeFileSync } from 'fs';
 import net from 'net';
 import { fileURLToPath } from 'url';
+import { parseLoopbackLlmTarget } from './server/llm-gateway-target';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,17 +31,8 @@ const isPortInUseSync = (port: number, host = '127.0.0.1') => {
 
 
 // ── 环回 LLM 网关：同源代理本机 Ollama/LM Studio/QClaw 等端点 ──
-// 仅允许转发到宿主机 loopback 服务（防局域网客户端把宿主当任意代理）。
-function isLoopbackTarget(raw: string): URL | null {
-    try {
-        const parsed = new URL(raw);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-        if (!['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)) return null;
-        return parsed;
-    } catch {
-        return null;
-    }
-}
+// 目标校验（loopback + LLM API 路径白名单）与 electron 主进程共用同一口径，
+// 单一来源在 server/llm-gateway-target.ts —— 改白名单时两边要同步。
 
 async function forwardLocalLlm(req: IncomingMessage, res: ServerResponse, target: string) {
     const chunks: Buffer[] = [];
@@ -56,14 +48,48 @@ async function forwardLocalLlm(req: IncomingMessage, res: ServerResponse, target
             },
             body: ['GET', 'HEAD'].includes(req.method || 'GET') ? undefined : body,
         });
-        const respBuf = Buffer.from(await upstream.arrayBuffer());
+        const contentType = upstream.headers.get('content-type') ?? 'application/json';
+
+        // 流式（SSE）必须边读边写。此前这里一律 `await upstream.arrayBuffer()`，
+        // 再带 Content-Length 一次性回给浏览器 —— 开发期经此转发的每一次流式调用，
+        // 到页面都变成"最后一个字节才到齐"，字幕永远只能显示"正在思考"。
+        // 这条代理只转发 loopback，所以线上不受影响；但开发/自测看到的就是这个假象。
+        if (!upstream.body || !contentType.includes('text/event-stream')) {
+            const respBuf = Buffer.from(await upstream.arrayBuffer());
+            res.writeHead(upstream.status, {
+                'Content-Type': contentType,
+                'Content-Length': String(respBuf.length),
+            });
+            res.end(respBuf);
+            return;
+        }
+
         res.writeHead(upstream.status, {
-            'Content-Type': upstream.headers.get('content-type') ?? 'application/json',
-            'Content-Length': String(respBuf.length),
+            'Content-Type': contentType,
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',
         });
-        res.end(respBuf);
+        res.flushHeaders?.();
+
+        const reader = upstream.body.getReader();
+        // 客户端中途关页面/取消请求：上游也要停，别让它继续烧 token
+        const abort = () => { void reader.cancel().catch(() => {}); };
+        req.on('close', abort);
+        try {
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (!res.write(Buffer.from(value))) {
+                    await new Promise<void>(resolve => res.once('drain', () => resolve()));
+                }
+            }
+        } finally {
+            req.off('close', abort);
+            res.end();
+        }
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (res.headersSent) { res.end(); return; }
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: `本地 LLM 端点不可达: ${message}` }));
     }
@@ -77,10 +103,10 @@ function localLlmGatewayPlugin(): Plugin {
                 const url = new URL(req.url || '/', 'http://localhost');
                 if (url.pathname !== '/api/local-llm-gateway') return next();
                 const raw = url.searchParams.get('target') || '';
-                const target = isLoopbackTarget(raw);
+                const target = parseLoopbackLlmTarget(raw);
                 if (!target) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'target 必须是宿主机 loopback 地址' }));
+                    res.end(JSON.stringify({ error: 'target 必须是宿主机 loopback 的本地 LLM API 地址' }));
                     return;
                 }
                 void forwardLocalLlm(req, res, target.toString());
@@ -247,20 +273,35 @@ function roomServerPlugin(): Plugin {
                 }
             };
 
-            server.httpServer?.once('listening', () => {
+            const startWhenListening = () => {
                 void start().catch(error => {
                     console.error(`[Room Server] Startup failed: ${error instanceof Error ? error.message : String(error)}`);
                 });
-            });
+            };
+            server.httpServer?.once('listening', startWhenListening);
+            // 与 TTS 插件同款守卫：configureServer 可能在 httpServer 已监听后才执行，
+            // 只挂 once('listening') 会静默漏启（实测于 Vite 6 CLI 启动路径）
+            if (server.httpServer?.listening) startWhenListening();
             server.httpServer?.once('close', cleanup);
             return cleanup;
         }
     };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, '.', '');
+  const isProdBuild = mode === 'production';
   return {
+    // jotai/zustand 等依赖用 `import.meta.env ? import.meta.env.MODE : ...` 裸引用
+    // 整个环境对象,Vite 会把含全部 VITE_* 变量的完整对象打成字面量——实测会让
+    // VITE_NVIDIA_API_KEY 泄入产物(scripts/tests/security-build.test.ts 的根因)。
+    // 仅构建期用安全字面量覆盖裸引用;成员访问(import.meta.env.VITE_X)由 Vite
+    // 按具体属性正常静态替换,不受影响。dev 保持真实 import.meta.env。
+    ...(command === 'build' ? {
+      define: {
+        'import.meta.env': `({ BASE_URL: "/", MODE: ${JSON.stringify(mode)}, DEV: ${!isProdBuild}, PROD: ${isProdBuild}, SSR: false })`,
+      },
+    } : {}),
     server: {
       port: 3001,
       strictPort: true,
@@ -354,7 +395,7 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api\/nvidia-models/, '/models'),
           configure: (proxy) => {
             proxy.on('proxyReq', (proxyReq) => {
-              const apiKey = env.NVIDIA_API_KEY || env.VITE_NVIDIA_API_KEY;
+              const apiKey = env.NVIDIA_API_KEY;
               if (apiKey) proxyReq.setHeader('Authorization', `Bearer ${apiKey}`);
             });
           }
@@ -365,7 +406,7 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api\/nvidia-chat/, '/chat/completions'),
           configure: (proxy) => {
             proxy.on('proxyReq', (proxyReq) => {
-              const apiKey = env.NVIDIA_API_KEY || env.VITE_NVIDIA_API_KEY;
+              const apiKey = env.NVIDIA_API_KEY;
               if (apiKey) proxyReq.setHeader('Authorization', `Bearer ${apiKey}`);
             });
           }

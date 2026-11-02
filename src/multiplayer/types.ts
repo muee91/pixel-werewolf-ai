@@ -15,6 +15,10 @@ export interface RoomPlayer {
     isReady: boolean;
     isConnected: boolean;
     hasUsedAISuggestion: boolean;
+    /** 房主侧可见性：房间服务最近一次收到该座位入站消息（含心跳 pong）的时刻 */
+    lastSeenAt?: number | null;
+    /** 房主侧可见性：静默时长已超过宽限期的一半，仅提示，不影响对局推进 */
+    isUnstable?: boolean;
 }
 
 export interface RoomState {
@@ -56,6 +60,7 @@ export type SseEvent =
     | { type: 'ROLE_RECEIVED_ACK'; seatNumber: number }
     | { type: 'PLAYER_ACTION'; playerId: string; actionId: string; clientSeq: number; ts: number; action: string; actionData: any }
     | { type: 'ACTION_ACK'; playerId: string; actionType: string; success: boolean; pending?: boolean; targetPlayerId?: string; actionId?: string }
+    | { type: 'MESSAGE_TOO_LARGE'; reason: string; receivedBytes: number; limitBytes: number }
     | { type: 'PLAYER_DISCONNECTED'; playerId: string; nickname: string; seatNumber: number | null; disconnectGraceMs: number }
     | { type: 'PLAYER_RECONNECTED'; playerId: string; nickname: string; seatNumber: number | null }
     | { type: 'PLAYER_KICKED'; reason: string }

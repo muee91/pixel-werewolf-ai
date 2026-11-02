@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
 import { isInternalDebugLog } from '../utils/visibility';
+import { confirmDialog } from '../utils/notify';
 import {
     gamePhaseAtom,
     playersAtom,
@@ -33,7 +34,7 @@ import {
     remoteServerConfigAtom,
 } from '../store';
 import { addToastAtom, isPausedAtom, uiConfigAtom } from '../atoms';
-import { GamePhase, PHASE_LABELS, Role, ROLE_INFO, WOLF_ROLES, GAME_PRESETS, GameEvaluation } from '../types';
+import { GamePhase, PHASE_LABELS, Role, WOLF_ROLES, GAME_PRESETS, GameEvaluation } from '../types';
 import { AudioService } from '../audio';
 import { useGameEngine } from '../hooks/useGameEngine';
 import { useTheaterEngine } from '../hooks/useTheaterEngine';
@@ -131,6 +132,8 @@ export interface GameRoomState {
     isLlmThinking: boolean;
 
     handleMinimize: () => void;
+    /** 暂存快照并返回主页(菜单「最小化」与退出确认「暂存并退出」共用);联机先弹断线确认,返回是否已执行 */
+    handleSuspend: (verb?: '最小化' | '暂存并退出') => Promise<boolean>;
     handleConfirmExit: () => void;
     handleToggleFullscreen: () => void;
     handleAutoPlayToggle: () => void;
@@ -262,6 +265,16 @@ export function useGameRoomState(): GameRoomState {
         setScreen('HOME');
     };
 
+    // 联机暂存会卸载视图并断开 WebSocket(其他玩家将看到你离线),最小化与暂存退出都必须先确认
+    const handleSuspend = async (verb: '最小化' | '暂存并退出' = '最小化'): Promise<boolean> => {
+        if (multiplayerRole && !(await confirmDialog(`联机对局${verb}将断开与房间的连接，其他玩家会看到你离线。确定${verb}？`, {
+            title: `${verb}联机对局？`,
+            confirmLabel: verb,
+        }))) return false;
+        handleMinimize();
+        return true;
+    };
+
     const handleConfirmExit = () => {
         AudioService.getInstance().stop();
         setShowExitConfirm(false);
@@ -344,7 +357,7 @@ export function useGameRoomState(): GameRoomState {
     const isGameOver = phase === GamePhase.GAME_OVER || phase === GamePhase.GAME_REVIEW;
     const phaseLabel = perspective === 'GOD' ? PHASE_LABELS[phase] : (isDay ? '白天' : '夜晚');
 
-    const showPhaseBanners = phase === GamePhase.KNIGHT_CHALLENGE || phase === GamePhase.WOLF_EXPLODE || phase === GamePhase.SHERIFF_WITHDRAW || phase === GamePhase.CUPID_LINK || phase === GamePhase.MERCHANT_ACTION || (godState.bloodMoonSealed && canSeeGodStateDetails) || (godState.lovers && canSeeLoverInfo) || (humanPlayer && debugGodView && showGodViewHint && !isTheater && !isReplayMode);
+    const showPhaseBanners = Boolean(phase === GamePhase.KNIGHT_CHALLENGE || phase === GamePhase.WOLF_EXPLODE || phase === GamePhase.SHERIFF_WITHDRAW || phase === GamePhase.CUPID_LINK || phase === GamePhase.MERCHANT_ACTION || (godState.bloodMoonSealed && canSeeGodStateDetails) || (godState.lovers && canSeeLoverInfo) || (humanPlayer && debugGodView && showGodViewHint && !isTheater && !isReplayMode));
 
     return {
         players, logs, phase, isAuto, setIsAuto, exitGame, turnCount, isTheater, isDay,
@@ -356,7 +369,7 @@ export function useGameRoomState(): GameRoomState {
         canSeeGodStateDetails, canSeeLoverInfo, humanProgressText, isNightPhase, isSetup, isGameOver,
         phaseLabel, showExitConfirm, setShowExitConfirm, resultPanelMinimized, setResultPanelMinimized,
         selectedPresetKey, setSelectedPresetKey, logExpanded, setLogExpanded, isFullscreen, isLlmThinking,
-        handleMinimize, handleConfirmExit, handleToggleFullscreen, handleAutoPlayToggle,
+        handleMinimize, handleSuspend, handleConfirmExit, handleToggleFullscreen, handleAutoPlayToggle,
         showPhaseBanners, showGodViewHint,
     };
 }

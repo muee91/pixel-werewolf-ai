@@ -1,9 +1,11 @@
 // 体素场景精灵:像素道具、墓碑、营火、火炬、地形、怪物等。
-// 道具/营火/火炬为原版 Minecraft 贴图逐像素转录(mc-sprites.ts),其余从 VOXEL_TOKENS 取色。
+// 道具/营火/火炬为程序化生成的原创像素(scripts/gen-pixel-art.ts → camp-tiles.ts)，其余从 VOXEL_TOKENS 取色。
 import React from 'react';
 import { clsx } from 'clsx';
 import { VOXEL_TOKENS as T } from '../../../../themes/voxel-tokens';
-import { McSpriteCanvas, shadeHex } from './McSprite';
+import { CampSpriteCanvas, shadeHex } from './CampSprite';
+import { CAMP_TILES } from './camp-tiles';
+import { itemPixelScale } from './spriteScale';
 
 const pixel = { imageRendering: 'pixelated' as const };
 
@@ -15,7 +17,7 @@ export const PixelBlock: React.FC<{ style?: React.CSSProperties; className?: str
   />
 );
 
-// 道具类型 → 原版贴图(claw 无对应物,用骨头;crossbow 用弓)
+// 道具类型 → 营地贴图(claw 无对应物,用骨头;crossbow 用弓)
 const ITEM_SPRITE: Record<string, string> = {
   sword: 'sword',
   bow: 'bow',
@@ -31,13 +33,17 @@ const ITEM_SPRITE: Record<string, string> = {
   map: 'map',
 };
 
-/** 像素道具:原版 16×16 贴图转录。药水按角色色重着色瓶内液体。 */
-export const PixelItem: React.FC<{ type: string; color?: string; small?: boolean }> = ({ type, color, small }) => {
+/** 像素道具：16×16 槽位为主，手持物是 16×28（0x72 的剑 10×21 / 弓 7×26，见 gen-pixel-art.ts）。药水按角色色重着色瓶内液体。 */
+export const PixelItem: React.FC<{ type: string; color?: string; small?: boolean; fit?: number }> = ({ type, color, small, fit }) => {
   const name = ITEM_SPRITE[type] ?? 'torch';
   const tint = type === 'potion' && color
     ? { '#d46d49': color, '#a94725': shadeHex(color, 0.72), '#973716': shadeHex(color, 0.5) }
     : undefined;
-  return <McSpriteCanvas name={name} px={small ? 1 : 2} tint={tint} />;
+  const sprite = CAMP_TILES[name];
+  // 放大倍数按"容器高度预算"算，而不是固定 2×：16×28 的手持物在 32px 预算里放不下 2×，
+  // 硬放会顶穿卡片；降到 1× 是 28px，正好落在 44×60 的道具框里。
+  const px = itemPixelScale(sprite, !!small, fit);
+  return <CampSpriteCanvas name={name} px={px} tint={tint} />;
 };
 
 /** DEAD 戳 */
@@ -45,7 +51,7 @@ export const DeadStamp: React.FC<{ compact?: boolean }> = ({ compact }) => (
   <span
     className={clsx(
       'relative -rotate-6 border-[3px] font-black text-white',
-      compact ? 'px-1 py-0 text-[8px]' : 'px-2 py-0.5 text-[10px]'
+      compact ? 'px-1 py-0 text-xs' : 'px-2 py-0.5 text-xs'
     )}
     style={{
       background: T.deadStamp,
@@ -75,26 +81,26 @@ export const PixelGrave: React.FC<{ seed: number; speaking?: boolean }> = ({ see
     <div className="absolute bottom-[19px] left-[14px] h-2 w-10 rotate-90 bg-[#343a40]" />
     <div className="absolute bottom-[24px] left-[12px] h-2 w-14 bg-[#343a40]" />
     <div className="absolute bottom-0 left-0 h-2 w-full bg-[#343a40]" />
-    <div className="absolute bottom-[4px] left-[8px] text-[8px] font-black text-[#1d2430]">{String(seed).padStart(2, '0')}</div>
+    <div className="absolute bottom-[4px] left-[8px] text-xs font-black text-[#1d2430]">{String(seed).padStart(2, '0')}</div>
   </div>
 );
 
-/** 营火:原版贴图 + 呼吸光晕 */
+/** 营火:程序化贴图 + 呼吸光晕 */
 export const PixelCampfire: React.FC = () => (
   <div className="relative h-20 w-24" style={pixel}>
     <div className="absolute inset-0" style={{ background: 'radial-gradient(closest-side, rgba(246,180,67,0.35), transparent)', animation: 'vw-glow 1.6s steps(2) infinite' }} />
-    <div className="absolute bottom-0 left-1/2 -translate-x-1/2"><McSpriteCanvas name="campfire" px={5} /></div>
+    <div className="absolute bottom-0 left-1/2 -translate-x-1/2"><CampSpriteCanvas name="campfire" px={5} /></div>
   </div>
 );
 
-/** 火炬:原版贴图 */
+/** 火炬:程序化贴图 */
 export const PixelTorch: React.FC<{ x: number; y: number }> = ({ x, y }) => (
   <div className="absolute h-10 w-8" style={{ left: `${x}%`, bottom: y, ...pixel }}>
-    <div className="absolute bottom-0 left-1/2 -translate-x-1/2"><McSpriteCanvas name="torch" px={2} /></div>
+    <div className="absolute bottom-0 left-1/2 -translate-x-1/2"><CampSpriteCanvas name="torch" px={2} /></div>
   </div>
 );
 
-/** 怪物(狼/村民):按原版配色风格化的侧视像 */
+/** 怪物(狼/村民):按营地色板风格化的侧视像 */
 export const PixelMob: React.FC<{ type: 'wolf' | 'villager' }> = ({ type }) => (
   <div className="relative h-14 w-20 opacity-90" style={pixel}>
     {type === 'wolf' ? (
@@ -141,7 +147,7 @@ export const PixelRedstoneRig: React.FC = () => (
   </div>
 );
 
-/** 地形条(底部方块带,带原版风格的噪点纹理) */
+/** 地形条(底部方块带,带程序化噪点纹理) */
 export const TerrainStrip: React.FC<{ mine?: boolean; redstone?: boolean }> = ({ mine, redstone }) => {
   const blocks = mine
     ? ['#42484f', '#343a40', T.stone, '#22272d', '#42484f', '#59616a']

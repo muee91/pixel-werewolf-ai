@@ -1,6 +1,7 @@
 import { GamePhase, PlayerStatus, isWolfRole, type Player, type UserInput } from '../../../types';
+import { pacedWait } from '../pacing';
 import { isEffectivelyAlive } from '../../../game/rules';
-import { appendLog, isLlmAbortedResult, isLlmFailedResult, mapWithConcurrency, parseSheriffFlow, VOTE_LLM_CONCURRENCY } from '../../engineHelpers';
+import { appendLog, isLlmAbortedResult, isLlmFailedResult, mapWithConcurrency, VOTE_LLM_CONCURRENCY } from '../../engineHelpers';
 import { AudioService } from '../../../audio';
 import type { LLMResponse } from '../../../services/llm';
 import type { PhaseHandlerContext } from '../phaseContext';
@@ -8,20 +9,34 @@ import type { PhaseHandlerContext } from '../phaseContext';
 // ===== 警长竞选阶段 handler：SHERIFF_ELECTION / SHERIFF_VOTING / SHERIFF_WITHDRAW =====
 // 函数体自 useGameEngine 的 GOD-loop switch case 原样搬移，语义以 ctx 传递保持不变。
 
+/** 竞选发言文案：预取与执行共用同一句，分叉就会变成"预取了却对不上、白打一次"。 */
+export const sheriffCampaignInstruction = (isPkSpeech: boolean): string => (isPkSpeech
+    ? "警长投票出现平票，你正在进行警长PK发言。请围绕自己为什么更适合拿警徽做简短发言。"
+    : "你正在竞选警长。请发表简短竞选发言，说明你会如何带队归票。");
+
 export const handleSheriffElection = async (ctx: PhaseHandlerContext) => {
     const {
         players, godState, speakingQueue,
         setSpeakingQueue, setPhase, setIsProcessing, addSystemLog, saveSnapshot,
-        generateTurn, getRule,
+        generateTurn, getRule, prefetchTurn,
     } = ctx;
     const [nextId, ...rest] = speakingQueue;
     if (nextId) {
         const candidate = players.find(p => p.id === nextId);
         if (candidate && isEffectivelyAlive(candidate)) {
             const isPkSpeech = (godState.sheriffVoteRound ?? 1) > 1;
-            const prompt = isPkSpeech
-                ? "警长投票出现平票，你正在进行警长PK发言。请围绕自己为什么更适合拿警徽做简短发言。"
-                : "你正在竞选警长。请发表简短竞选发言，说明你会如何带队归票。";
+            const prompt = sheriffCampaignInstruction(isPkSpeech);
+            // 竞选发言批量预取：候选人是全体活人（12 人局 = 12 次调用），
+            // 逐座位串行时这一段独占全流程最长的纯等待。预取把它们压成 ceil(N/3) 个并发批次，
+            // 上屏顺序仍是座位序，玩家看到的是正常的一轮竞选发言。
+            // 代价：同批候选人的提示词在同一天花板下构建，"后发言者听不到前一位竞选发言"，
+            // 候选人名单本身仍在提示词里（godState.sheriffCandidates），所以"我该不该上警"的信息不缺。
+            for (const queuedId of speakingQueue) {
+                const queued = players.find(p => p.id === queuedId);
+                if (queued && isEffectivelyAlive(queued)) {
+                    prefetchTurn(queued, { phase: GamePhase.SHERIFF_ELECTION, instruction: prompt });
+                }
+            }
             const result = await generateTurn(candidate, prompt, undefined, true);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
         }
@@ -188,18 +203,29 @@ export const handleSheriffWithdraw = async (ctx: PhaseHandlerContext) => {
         players, godState, turnCount, globalConfig, remoteConfig,
         setGodState, setPlayers, setSpeakingQueue, setTurnCount, setPhase, setTimeline, setSpeaker, setIsPlayingAudio, setIsProcessing, setLogs, addSystemLog, saveSnapshot,
         logIdCounter, isAutoRef,
-        getTargetDecision, getActorConfig, getAlivePlayers, isWolfExplodeEnabled, waitForSpectatorDialogue,
+        getTargetDecision, getActorConfig, getAlivePlayers, isWolfExplodeEnabled, waitForSpectatorDialogue, prefetchTurn,
     } = ctx;
     setIsProcessing(true);
     try {
         const candidates = godState.sheriffCandidates ?? [];
         const remainingCandidates: number[] = [];
 
+        // 退水决策批量预取。规则上"退水"是所有候选人同时做的选择，此前却在这个 tick 里
+        // 逐个 await（12 人局 = 12 次往返、中间只有播报），是全流程最长的一段零演出纯等待。
+        // 预取只改发起时机：决策同时下发（更贴近真实同时退水），播报仍按座位序、带 TTS。
+        const withdrawInstruction = `你正在竞选警长，是否退水（放弃竞选）？`;
+        for (const candidateId of candidates) {
+            const queued = players.find(p => p.id === candidateId);
+            if (queued && isEffectivelyAlive(queued)) {
+                prefetchTurn(queued, { phase: GamePhase.SHERIFF_WITHDRAW, instruction: withdrawInstruction });
+            }
+        }
+
         for (const candidateId of candidates) {
             const candidate = players.find(p => p.id === candidateId);
             if (!candidate || !isEffectivelyAlive(candidate)) continue;
 
-            const withdrawPrompt = `你正在竞选警长，是否退水（放弃竞选）？`;
+            const withdrawPrompt = withdrawInstruction;
             const result = await getTargetDecision(candidate, [-1], GamePhase.SHERIFF_WITHDRAW, withdrawPrompt, '选择是否退水。');
             if (!isAutoRef.current) return;
 
@@ -270,7 +296,7 @@ export const handleSheriffWithdraw = async (ctx: PhaseHandlerContext) => {
                         actor.fineTune,
                     );
                 } else {
-                    await new Promise(resolve => window.setTimeout(resolve, 200));
+                    await pacedWait(200);
                 }
                 await waitForSpectatorDialogue(publicStatement, statementStartedAt);
             } finally {

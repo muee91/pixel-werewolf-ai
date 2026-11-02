@@ -12,7 +12,8 @@
     "test": "tsx --test scripts/tests/*.test.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run build",
+    "lint": "eslint src",
+    "check": "npm run typecheck && npm run lint && npm run build",
     "android:add": "cap add android",
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
@@ -20,10 +21,12 @@
     "app:dev": "electron electron/main.cjs",
     "app:build": "npm run build && esbuild server/room-server.ts --bundle --platform=node --format=cjs --outfile=dist-electron/room-server.cjs && electron-builder --mac",
     "tts:venv": "bash scripts/build-tts-venv.sh",
-    "mcp-bridge": "node mcp/standalone-hub.mjs"
+    "mcp-bridge": "node mcp/standalone-hub.mjs",
+    "gen:art": "tsx scripts/gen-pixel-art.ts",
+    "gen:icon": "tsx scripts/gen-app-icon.ts",
+    "publish:export": "node scripts/export-public-repo.mjs"
   },
   "dependencies": {
-    "@capacitor-community/text-to-speech": "^8.0.2",
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/share": "^8.0.1",
     "@capawesome/capacitor-file-picker": "^8.0.3",
@@ -41,12 +44,12 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@babel/core": "^8.0.1",
     "@capacitor/android": "^8.4.1",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
     "@playwright/test": "^1.61.1",
     "@types/node": "^22.14.0",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.185.1",
@@ -57,10 +60,14 @@
     "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.24.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "pngjs": "^7.0.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.23.0",
     "typescript": "~5.8.2",
+    "typescript-eslint": "^8.72.1",
     "vite": "^6.4.3"
   },
   "build": {

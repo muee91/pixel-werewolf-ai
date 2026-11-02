@@ -84,7 +84,7 @@ export async function generateAdvisorResult(
             turnCount: requestPayload.turnCount,
             players: visiblePlayers,
             logs: safeLogs,
-            roleConfigStr: gameConfig.roles.map((r: any) => ROLE_INFO[r].label).join(' '),
+            roleConfigStr: gameConfig.roles.map((r: any) => ROLE_INFO[r as keyof typeof ROLE_INFO]?.label ?? String(r)).join(' '),
             roles: gameConfig.roles,
             rules: gameConfig.rules,
             godState: {

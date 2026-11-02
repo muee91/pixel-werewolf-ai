@@ -1,5 +1,5 @@
 import React from 'react';
-import { McIcon } from '../game/voxel/primitives';
+import { CampIcon } from '../game/voxel/primitives';
 
 interface ModeOption {
     id: 'ai' | 'human' | 'multiplayer';
@@ -53,6 +53,8 @@ export const HomeModeSwitch: React.FC<HomeModeSwitchProps> = ({
                     return (
                         <button
                             key={option.id}
+                            type="button"
+                            aria-pressed={active}
                             onClick={() => onChange(option.id)}
                             className={buttonClassName}
                             style={{
@@ -65,11 +67,11 @@ export const HomeModeSwitch: React.FC<HomeModeSwitchProps> = ({
                         >
                             {option.sideDecoration}
                             <div className="flex items-center gap-2 pr-3">
-                                {option.icon ? <McIcon icon={option.icon} px={2} /> : null}
+                                {option.icon ? <CampIcon icon={option.icon} px={2} /> : null}
                                 <div className="text-left">
-                                    <span className="block text-[10px] sm:text-xs font-bold leading-tight">{option.title}</span>
+                                    <span className="block text-sm font-black leading-tight">{option.title}</span>
                                     {option.subtitle ? (
-                                        <span className="block text-[8px] sm:text-[10px] leading-tight" style={{ color: option.mutedColor }}>{option.subtitle}</span>
+                                        <span className="block text-xs leading-tight" style={{ color: option.mutedColor }}>{option.subtitle}</span>
                                     ) : null}
                                 </div>
                             </div>
@@ -89,11 +91,13 @@ export const HomeModeSwitch: React.FC<HomeModeSwitchProps> = ({
                 return (
                     <button
                         key={option.id}
+                        type="button"
+                        aria-pressed={active}
                         onClick={() => onChange(option.id)}
                         className={buttonClassName}
                         style={{
                             background: active ? option.accent : 'transparent',
-                            color: active ? (option.activeTextColor || '#fff') : (option.inactiveTextColor || option.mutedColor),
+                            color: active ? (option.activeTextColor || 'var(--voxel-ink)') : (option.inactiveTextColor || option.mutedColor),
                             ...buttonStyle,
                         }}
                     >

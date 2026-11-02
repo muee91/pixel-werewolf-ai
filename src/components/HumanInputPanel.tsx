@@ -22,19 +22,27 @@ import {
     actionAckStateAtom,
 } from '../store';
 
-// MC 原版对话框语言:灰石面板 + 斜面浮雕(左上白高光/右下暗影) + 凹陷文字井
+// 方块营地对话框语言:暖石面板 + 斜面浮雕(左上纸色高光/右下暖暗影) + 凹陷文字井
+// 色值全部走 --voxel-mc-* 令牌(见 themes/voxel-tokens.ts),与全应用暖色板统一
 const MC_PANEL_STYLE: React.CSSProperties = {
-    background: '#c6c6c6',
-    borderColor: '#000000',
-    boxShadow: 'inset 3px 3px 0 #ffffff, inset -3px -3px 0 #555555, 6px 6px 0 rgba(0,0,0,0.45)',
+    background: 'var(--voxel-mc-panel)',
+    borderColor: 'var(--voxel-ink)',
+    boxShadow: 'inset 3px 3px 0 var(--voxel-paper), inset -3px -3px 0 var(--voxel-mc-bevel-dark), 6px 6px 0 rgba(0,0,0,0.45)',
 };
-const MC_BTN = "border-2 px-4 py-2 text-sm font-black transition-all shadow-[inset_2px_2px_0_#ffffff,inset_-2px_-2px_0_#555555] hover:brightness-110 active:shadow-[inset_2px_2px_0_#555555,inset_-2px_-2px_0_#ffffff]";
+const MC_BTN = "border-2 px-4 py-2 text-sm font-black transition-all shadow-[inset_2px_2px_0_var(--voxel-paper),inset_-2px_-2px_0_var(--voxel-mc-bevel-dark)] hover:brightness-110 active:shadow-[inset_2px_2px_0_var(--voxel-mc-bevel-dark),inset_-2px_-2px_0_var(--voxel-paper)]";
 const MC_FIELD_STYLE: React.CSSProperties = {
-    background: '#181818',
-    color: '#f2dfaa',
-    borderColor: '#000000',
-    boxShadow: 'inset 2px 2px 0 #3a3a3a, inset -2px -2px 0 #6e6e6e',
+    background: 'var(--voxel-mc-field)',
+    color: 'var(--voxel-paper)',
+    borderColor: 'var(--voxel-ink)',
+    boxShadow: 'inset 2px 2px 0 var(--voxel-mc-inset-shadow), inset -2px -2px 0 var(--voxel-mc-bevel-dark)',
 };
+
+// 应用内提示/确认对话框:替代 alert/confirm(倒计时中阻塞式原生弹窗会吃掉决策时间)
+interface PendingDialog {
+    kind: 'alert' | 'confirm';
+    message: string;
+    onConfirm?: () => void;
+}
 
 interface SpeechRecognitionEvent {
     resultIndex: number;
@@ -252,12 +260,16 @@ const HumanInputPanel = () => {
             setWaitCountdown(null);
             return;
         }
-        setWaitCountdown(Math.round(HUMAN_INPUT_TIMEOUT_MS / 1000));
+        // 与引擎同一来源：GameConfig.humanInputTimeoutMs 覆盖默认常量（G-5）
+        const timeoutMs = (typeof gameConfig.humanInputTimeoutMs === 'number' && gameConfig.humanInputTimeoutMs > 0)
+            ? gameConfig.humanInputTimeoutMs
+            : HUMAN_INPUT_TIMEOUT_MS;
+        setWaitCountdown(Math.round(timeoutMs / 1000));
         const timer = window.setInterval(() => {
             setWaitCountdown(v => (v == null ? null : Math.max(0, v - 1)));
         }, 1000);
         return () => window.clearInterval(timer);
-    }, [isMyTurn, isMultiplayerSeat, humanPlayer?.roomPlayerId, humanPlayer?.id, phase, turnCount]);
+    }, [isMyTurn, isMultiplayerSeat, humanPlayer?.roomPlayerId, humanPlayer?.id, phase, turnCount, gameConfig.humanInputTimeoutMs]);
 
     const [text, setText] = useState('');
     const [targetId, setTargetId] = useState<number | null>(null);
@@ -274,6 +286,19 @@ const HumanInputPanel = () => {
     const [withdrawExplode, setWithdrawExplode] = useState(false);
     const isHumanWolf = !!humanPlayer && WOLF_ROLES.includes(humanPlayer.role);
     const recognitionRef = useRef<any>(null);
+    // 校验提示与不可逆操作确认都走应用内模态(替代 alert/confirm)
+    const [dialog, setDialog] = useState<PendingDialog | null>(null);
+    const dialogConfirmRef = useRef<HTMLButtonElement | null>(null);
+
+    useEffect(() => {
+        if (!dialog) return;
+        dialogConfirmRef.current?.focus();
+        const onKey = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setDialog(null);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [dialog]);
 
     useEffect(() => {
         if (isMyTurn) {
@@ -493,68 +518,85 @@ const HumanInputPanel = () => {
 
     if (!isMyTurn || !canActInPhase || !humanPlayer || isReplayMode || isTheaterMode) return null;
 
-    const handleSubmit = () => {
-        if (isVoting && targetId === null) {
-            if (isExilePkVoting) {
-                alert("平票PK轮不允许弃票，请选择一名平票候选人。");
+    const submitInput = (input: UserInput) => {
+        if (humanPlayer && humanInputResolverMap[humanPlayer.id]) {
+            humanInputResolverMap[humanPlayer.id](input);
+        } else if (isGuest && multiplayerState.roomId && multiplayerState.playerId) {
+            setActionAckState({ pending: true, actionType: input.action || phase, success: null, timestamp: Date.now() });
+            const envelope = createPlayerActionEnvelope(nextMultiplayerActionSequence);
+            const sent = sendWsMessage(createPlayerActionMessage(envelope, input));
+            if (!sent) {
+                setActionAckState({ pending: false, actionType: input.action || phase, success: false, timestamp: Date.now() });
+                setDialog({ kind: 'alert', message: '行动没有送达房主，请检查连接后重试。' });
                 return;
             }
-            if (!confirm("确定弃票吗？")) return;
+        } else {
+            // 引擎尚未登记 resolver 的竞态兜底：带上归属玩家，引擎登记后按 _playerId 认领
+            setUserInput(humanPlayer ? { ...input, _playerId: humanPlayer.id } : input);
+        }
+        setIsExpanded(false);
+    };
+
+    const handleSubmit = () => {
+        // ── 校验:不过即弹应用内提示(替代 alert,不再阻塞倒计时) ──
+        if (isVoting && targetId === null && isExilePkVoting) {
+            setDialog({ kind: 'alert', message: "平票PK轮不允许弃票，请选择一名平票候选人。" });
+            return;
         }
 
         if (isWitchAction) {
             if (targetId === 0 && !witchCanCure) {
-                alert("当前不能使用解药。");
+                setDialog({ kind: 'alert', message: "当前不能使用解药。" });
                 return;
             }
             if (targetId !== null && targetId !== 0 && !witchCanPoison) {
-                alert("当前不能使用毒药。");
+                setDialog({ kind: 'alert', message: "当前不能使用毒药。" });
                 return;
             }
         }
 
         if (isCupidLink) {
             if (cupidTarget1 === null || cupidTarget2 === null) {
-                alert("请选择两名玩家进行连结。");
+                setDialog({ kind: 'alert', message: "请选择两名玩家进行连结。" });
                 return;
             }
             if (cupidTarget1 === cupidTarget2) {
-                alert("不能选择同一名玩家。");
+                setDialog({ kind: 'alert', message: "不能选择同一名玩家。" });
                 return;
             }
         }
 
         if (isMerchantAction && merchantSkillType === null && targetId !== null) {
-            alert("请选择技能类型。");
+            setDialog({ kind: 'alert', message: "请选择技能类型。" });
             return;
         }
 
         // 不可逆的高代价操作统一二次确认（弃票可反悔性最高却有 confirm，方向不能反）
-        const lethalConfirms: string[] = [];
+        const confirmMessages: string[] = [];
+        if (isVoting && targetId === null) {
+            confirmMessages.push("确定弃票吗？");
+        }
         if (isKnightChallenge && targetId !== null) {
-            lethalConfirms.push(`你将与 ${targetId}号 决斗：若对方不是狼人，你将当场出局。确认发起决斗？`);
+            confirmMessages.push(`你将与 ${targetId}号 决斗：若对方不是狼人，你将当场出局。确认发起决斗？`);
         }
         if (isHunterAction && targetId !== null) {
-            lethalConfirms.push(`开枪带走 ${targetId}号 后不可撤销。确认开枪？`);
+            confirmMessages.push(`开枪带走 ${targetId}号 后不可撤销。确认开枪？`);
         }
         if (isWitchAction && witchCanPoison && targetId !== null && targetId !== 0) {
-            lethalConfirms.push(`对 ${targetId}号 使用毒药不可撤销。确认用毒？`);
+            confirmMessages.push(`对 ${targetId}号 使用毒药不可撤销。确认用毒？`);
         }
         if (isWolfExplode && targetId !== null) {
-            lethalConfirms.push(`自爆将立即出局并指刀 ${targetId}号。确认自爆？`);
+            confirmMessages.push(`自爆将立即出局并指刀 ${targetId}号。确认自爆？`);
         }
         if (phase === GamePhase.SHERIFF_WITHDRAW && withdrawExplode) {
-            lethalConfirms.push(`退水并自爆将立即出局${gameConfig.rules.doubleExplodeSwallowBadge ? '并触发警徽流失' : ''}。确认自爆？`);
+            confirmMessages.push(`退水并自爆将立即出局${gameConfig.rules.doubleExplodeSwallowBadge ? '并触发警徽流失' : ''}。确认自爆？`);
         }
         if (isMerchantAction && merchantSkillType !== null && targetId !== null) {
-            lethalConfirms.push(`把「${merchantSkillType === 'check' ? '查验' : merchantSkillType === 'poison' ? '毒药' : '守护'}」技能交给 ${targetId}号？若对方是狼人你将出局。确认发放？`);
-        }
-        for (const message of lethalConfirms) {
-            if (!confirm(message)) return;
+            confirmMessages.push(`把「${merchantSkillType === 'check' ? '查验' : merchantSkillType === 'poison' ? '毒药' : '守护'}」技能交给 ${targetId}号？若对方是狼人你将出局。确认发放？`);
         }
 
         if (canSpeakInPhase && !text.trim()) {
-            alert("请先输入发言。");
+            setDialog({ kind: 'alert', message: "请先输入发言。" });
             return;
         }
 
@@ -577,22 +619,12 @@ const HumanInputPanel = () => {
             explodeTarget: isWolfExplode && targetId !== null ? targetId : undefined,
             _advisorDebugData: advisorDebugData
         };
-        if (humanPlayer && humanInputResolverMap[humanPlayer.id]) {
-            humanInputResolverMap[humanPlayer.id](input);
-        } else if (isGuest && multiplayerState.roomId && multiplayerState.playerId) {
-            setActionAckState({ pending: true, actionType: input.action || phase, success: null, timestamp: Date.now() });
-            const envelope = createPlayerActionEnvelope(nextMultiplayerActionSequence);
-            const sent = sendWsMessage(createPlayerActionMessage(envelope, input));
-            if (!sent) {
-                setActionAckState({ pending: false, actionType: input.action || phase, success: false, timestamp: Date.now() });
-                alert('行动没有送达房主，请检查连接后重试。');
-                return;
-            }
-        } else {
-            // 引擎尚未登记 resolver 的竞态兜底：带上归属玩家，引擎登记后按 _playerId 认领
-            setUserInput(humanPlayer ? { ...input, _playerId: humanPlayer.id } : input);
+        if (confirmMessages.length > 0) {
+            // 阶段互斥使其实际只有一条;合并为一次应用内确认,取消即中止
+            setDialog({ kind: 'confirm', message: confirmMessages.join('\n'), onConfirm: () => submitInput(input) });
+            return;
         }
-        setIsExpanded(false);
+        submitInput(input);
     };
 
     const handleAdvisorSuggestion = async () => {
@@ -766,14 +798,15 @@ const HumanInputPanel = () => {
     };
 
     return (
+        <>
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-full max-w-4xl px-4 z-[100] animate-slide-up pointer-events-none">
             <div className="border-[4px] p-4 pointer-events-auto max-h-[calc(100dvh-2rem)] overflow-y-auto custom-scrollbar" style={MC_PANEL_STYLE}>
                 <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3 min-w-0">
-                        <span className="font-black shrink-0" style={{ color: 'var(--voxel-torch)', textShadow: '1px 1px 0 rgba(0,0,0,0.35)' }}>你的回合</span>
-                        {waitCountdown != null && <span className="text-xs font-black animate-pulse" style={{ color: 'var(--voxel-redstone)' }}>⏳ {waitCountdown}s 后由 AI 托管</span>}
-                        <span className="border-[3px] px-2 py-0.5 text-[10px] font-black uppercase tracking-wider shrink-0" style={{ background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}>
-                            {humanPlayer.role}
+                        <span className="font-black shrink-0" style={{ color: 'var(--voxel-ink)' }}>你的回合</span>
+                        {waitCountdown != null && <span className="text-xs font-black animate-pulse border-2 px-2 py-0.5" style={{ background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' }}>⏳ {waitCountdown}s 后由 AI 托管</span>}
+                        <span className="border-[3px] px-2 py-0.5 text-xs font-black uppercase tracking-wider shrink-0" style={{ background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}>
+                            {ROLE_INFO[humanPlayer.role]?.label ?? humanPlayer.role}
                         </span>
                         {instruction && <span className="text-sm font-medium break-words" style={{ color: 'var(--voxel-ink)' }}>{instruction}</span>}
                     </div>
@@ -807,7 +840,7 @@ const HumanInputPanel = () => {
                                     "border-[3px] px-3 py-1.5 text-xs font-black transition-all",
                                     isListening && "animate-pulse"
                                 )}
-                                style={isListening ? { background: 'var(--voxel-redstone)', color: '#fff', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-wood)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)' }}
+                                style={isListening ? { background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-wood-dark)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)' }}
                             >
                                 {isListening ? "聆听中..." : "🎤 语音转文字"}
                             </button>
@@ -823,7 +856,7 @@ const HumanInputPanel = () => {
                 )}
 
                 {advisorError && (
-                    <div className="mb-3 border-[3px] px-3 py-2 text-xs font-black" style={{ background: 'var(--voxel-redstone)', color: '#fff', borderColor: 'var(--voxel-ink)' }}>
+                    <div className="mb-3 border-[3px] px-3 py-2 text-xs font-black" style={{ background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' }}>
                         {advisorError}
                     </div>
                 )}
@@ -833,14 +866,14 @@ const HumanInputPanel = () => {
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         placeholder="输入你的发言..."
-                        className="w-full h-24 p-3 border-2 outline-none transition-all resize-none font-medium overflow-y-auto"
+                        className="w-full h-24 p-3 border-2 transition-all resize-none font-medium overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent2,#d94b3d)]"
                         style={MC_FIELD_STYLE}
                     />
                 )}
 
                 {needsTarget && (
                     <div className={clsx("space-y-2", canSpeakInPhase ? "mt-3" : "")}>
-                        <label className="text-[10px] font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-ink)' }}>
+                        <label className="text-xs font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-ink)' }}>
                             {phase === GamePhase.WITCH_ACTION ? "选择操作目标 (可选)" : isSheriffVoting ? "选择警长候选人" : isKnightChallenge ? "选择决斗目标" : isDemonHunterAction ? "选择猎杀目标" : isStoneGhostAction ? "选择查验目标" : isMerchantAction ? "选择技能发放目标" : isWolfExplode ? "选择指刀目标" : "选择目标"}
                         </label>
                         <div className="flex flex-wrap gap-2">
@@ -854,7 +887,8 @@ const HumanInputPanel = () => {
                                         MC_BTN,
                                         isWitchAction && !witchCanPoison && "cursor-not-allowed opacity-50"
                                     )}
-                                    style={(isWitchAction && !witchCanPoison) ? { background: 'var(--voxel-wood)', color: 'var(--voxel-paper-dim)', borderColor: 'var(--voxel-ink)' } : (targetId === p.id ? { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' })}
+                                    style={(isWitchAction && !witchCanPoison) ? { background: 'var(--voxel-wood-dark)', color: 'var(--voxel-paper-dim)', borderColor: 'var(--voxel-ink)' } : (targetId === p.id ? { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' })}
+                                    aria-pressed={targetId === p.id}
                                 >
                                     {p.id}号
                                 </button>
@@ -863,7 +897,8 @@ const HumanInputPanel = () => {
                                 <button
                                     onClick={() => setTargetId(targetId === 0 ? null : 0)}
                                     className={clsx(MC_BTN)}
-                                    style={targetId === 0 ? { background: 'var(--voxel-emerald)', color: '#fff', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
+                                    aria-pressed={targetId === 0}
+                                    style={targetId === 0 ? { background: 'var(--voxel-emerald)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
                                 >
                                     使用解药 (救人)
                                 </button>
@@ -883,17 +918,18 @@ const HumanInputPanel = () => {
 
                 {needsCupidLink && (
                     <div className={clsx("space-y-2", canSpeakInPhase || needsTarget ? "mt-3" : "")}>
-                        <label className="text-[10px] font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-redstone)' }}>选择情侣 (两名玩家)</label>
+                        <label className="text-xs font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-ink)' }}>选择情侣 (两名玩家)</label>
                         <div className="space-y-2">
                             <div>
-                                <span className="text-[10px] font-black ml-1" style={{ color: 'var(--voxel-paper-dim)' }}>玩家 1 💕</span>
+                                <span className="text-xs font-black ml-1" style={{ color: 'var(--voxel-ink)' }}>玩家 1 💕</span>
                                 <div className="flex flex-wrap gap-2 mt-1">
                                     {targetCandidates.map(p => (
                                         <button
                                             key={p.id}
                                             onClick={() => setCupidTarget1(cupidTarget1 === p.id ? null : p.id)}
+                                            aria-pressed={cupidTarget1 === p.id}
                                             className={clsx(MC_BTN, cupidTarget2 === p.id && "cursor-not-allowed opacity-50")}
-                                            style={cupidTarget1 === p.id ? { background: 'var(--voxel-redstone)', color: '#fff', borderColor: 'var(--voxel-ink)' } : cupidTarget2 === p.id ? { background: 'var(--voxel-wood)', color: 'var(--voxel-paper-dim)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
+                                            style={cupidTarget1 === p.id ? { background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' } : cupidTarget2 === p.id ? { background: 'var(--voxel-wood-dark)', color: 'var(--voxel-paper-dim)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
                                         >
                                             {p.id}号
                                         </button>
@@ -901,14 +937,15 @@ const HumanInputPanel = () => {
                                 </div>
                             </div>
                             <div>
-                                <span className="text-[10px] font-black ml-1" style={{ color: 'var(--voxel-paper-dim)' }}>玩家 2 💕</span>
+                                <span className="text-xs font-black ml-1" style={{ color: 'var(--voxel-ink)' }}>玩家 2 💕</span>
                                 <div className="flex flex-wrap gap-2 mt-1">
                                     {targetCandidates.map(p => (
                                         <button
                                             key={p.id}
                                             onClick={() => setCupidTarget2(cupidTarget2 === p.id ? null : p.id)}
+                                            aria-pressed={cupidTarget2 === p.id}
                                             className={clsx(MC_BTN, cupidTarget1 === p.id && "cursor-not-allowed opacity-50")}
-                                            style={cupidTarget2 === p.id ? { background: 'var(--voxel-redstone)', color: '#fff', borderColor: 'var(--voxel-ink)' } : cupidTarget1 === p.id ? { background: 'var(--voxel-wood)', color: 'var(--voxel-paper-dim)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
+                                            style={cupidTarget2 === p.id ? { background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' } : cupidTarget1 === p.id ? { background: 'var(--voxel-wood-dark)', color: 'var(--voxel-paper-dim)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
                                         >
                                             {p.id}号
                                         </button>
@@ -921,7 +958,7 @@ const HumanInputPanel = () => {
 
                 {needsMerchantSkill && targetId !== null && (
                     <div className="mt-3 space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-torch)' }}>选择技能类型</label>
+                        <label className="text-xs font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-ink)' }}>选择技能类型</label>
                         <div className="flex flex-wrap gap-2">
                             {[
                                 { type: 'check' as const, label: '查验身份', icon: '🔮', color: 'purple' },
@@ -931,8 +968,9 @@ const HumanInputPanel = () => {
                                 <button
                                     key={skill.type}
                                     onClick={() => setMerchantSkillType(merchantSkillType === skill.type ? null : skill.type)}
+                                    aria-pressed={merchantSkillType === skill.type}
                                     className={clsx(MC_BTN)}
-                                    style={merchantSkillType === skill.type ? (skill.color === 'purple' ? { background: 'var(--voxel-emerald)', color: '#fff', borderColor: 'var(--voxel-ink)' } : skill.color === 'red' ? { background: 'var(--voxel-redstone)', color: '#fff', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }) : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
+                                    style={merchantSkillType === skill.type ? (skill.color === 'purple' ? { background: 'var(--voxel-emerald)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' } : skill.color === 'red' ? { background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }) : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
                                 >
                                     {skill.icon} {skill.label}
                                 </button>
@@ -943,10 +981,11 @@ const HumanInputPanel = () => {
 
                 {phase === GamePhase.SHERIFF_WITHDRAW && (
                     <div className="mt-3 space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-torch)' }}>选择行动</label>
+                        <label className="text-xs font-black uppercase tracking-widest ml-1" style={{ color: 'var(--voxel-ink)' }}>选择行动</label>
                         <div className="flex flex-wrap gap-2">
                             <button
                                 onClick={() => setShouldWithdraw(true)}
+                                aria-pressed={shouldWithdraw && !withdrawExplode}
                                 className={clsx(MC_BTN)}
                                 style={shouldWithdraw && !withdrawExplode ? { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
                             >
@@ -954,6 +993,7 @@ const HumanInputPanel = () => {
                             </button>
                             <button
                                 onClick={() => setShouldWithdraw(false)}
+                                aria-pressed={!shouldWithdraw}
                                 className={clsx(MC_BTN)}
                                 style={!shouldWithdraw ? { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
                             >
@@ -962,8 +1002,9 @@ const HumanInputPanel = () => {
                             {isHumanWolf && gameConfig.rules.wolfExplodeEnabled && (
                                 <button
                                     onClick={() => { setShouldWithdraw(true); setWithdrawExplode(true); }}
+                                    aria-pressed={withdrawExplode}
                                     className={clsx(MC_BTN)}
-                                    style={withdrawExplode ? { background: 'var(--voxel-redstone)', color: '#fff', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
+                                    style={withdrawExplode ? { background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' } : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
                                     title="退水同时自爆出局；若开启双爆吞警徽，将导致警徽流失"
                                 >
                                     退水并自爆
@@ -981,17 +1022,57 @@ const HumanInputPanel = () => {
                     确认行动
                 </button>
                 {isGuest && actionAckState.pending && (
-                    <div className="text-xs font-black animate-pulse mt-1" style={{ color: 'var(--voxel-torch)' }}>⏳ 操作已提交，等待确认...</div>
+                    <div className="text-xs font-black animate-pulse mt-1" style={{ color: 'var(--voxel-ink)' }}>⏳ 操作已提交，等待确认...</div>
                 )}
                 {isGuest && !actionAckState.pending && actionAckState.success === true && (
-                    <div className="text-xs font-black mt-1" style={{ color: 'var(--voxel-emerald)' }}>✓ 操作已确认</div>
+                    <div className="text-xs font-black mt-1 border-2 px-2 py-0.5 inline-block" style={{ background: 'var(--voxel-emerald)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}>✓ 操作已确认</div>
                 )}
                 {isGuest && !actionAckState.pending && actionAckState.success === false && (
-                    <div className="text-xs font-black mt-1" style={{ color: 'var(--voxel-redstone)' }}>✗ 操作失败，请重试</div>
+                    <div className="text-xs font-black mt-1 border-2 px-2 py-0.5 inline-block" style={{ background: 'var(--voxel-redstone-deep)', color: 'var(--voxel-solid-white)', borderColor: 'var(--voxel-ink)' }}>✗ 操作失败，请重试</div>
                 )}
                 </>)}
             </div>
         </div>
+        {dialog && (
+            <div className="fixed inset-0 z-[130] flex items-center justify-center px-4">
+                <div className="absolute inset-0 bg-black/70" onClick={() => setDialog(null)} />
+                <div
+                    role="alertdialog"
+                    aria-modal="true"
+                    aria-label={dialog.kind === 'confirm' ? '操作确认' : '提示'}
+                    className="relative border-[4px] p-4 w-full max-w-md pointer-events-auto max-h-[80dvh] overflow-y-auto custom-scrollbar"
+                    style={MC_PANEL_STYLE}
+                >
+                    <div className="font-black text-sm leading-relaxed whitespace-pre-line" style={{ color: 'var(--voxel-ink)' }}>
+                        {dialog.message}
+                    </div>
+                    <div className="mt-4 flex justify-end gap-2">
+                        {dialog.kind === 'confirm' && (
+                            <button
+                                type="button"
+                                onClick={() => setDialog(null)}
+                                className={clsx(MC_BTN, 'py-2.5')}
+                                style={{ background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
+                            >
+                                取消
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            ref={dialogConfirmRef}
+                            onClick={() => { const onConfirm = dialog.onConfirm; setDialog(null); onConfirm?.(); }}
+                            className={clsx(MC_BTN, 'py-2.5')}
+                            style={dialog.kind === 'confirm'
+                                ? { background: 'var(--voxel-torch)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }
+                                : { background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', borderColor: 'var(--voxel-ink)' }}
+                        >
+                            {dialog.kind === 'confirm' ? '确认行动' : '知道了'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+        </>
     );
 };
 

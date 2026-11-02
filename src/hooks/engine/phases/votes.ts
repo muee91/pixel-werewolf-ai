@@ -1,4 +1,4 @@
-import { GamePhase, PlayerStatus, Role, isImmuneToVote, isWolfRole } from '../../../types';
+import { GamePhase, PlayerStatus, Role, isImmuneToVote } from '../../../types';
 import { appendPendingDeathActionIds, enforcePkVoteTarget, getExileVoterIds, isEffectivelyAlive, resolveExileVote } from '../../../game/rules';
 import { appendLog, isLlmAbortedResult, isLlmFailedResult, mapWithConcurrency, parseSheriffFlow, VOTE_LLM_CONCURRENCY } from '../../engineHelpers';
 import type { PhaseHandlerContext } from '../phaseContext';

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import { clsx } from 'clsx';
 import { globalApiConfigAtom, llmPresetsAtom, llmProvidersAtom, ttsPresetsAtom, actorProfilesAtom, edgeTtsVoicesAtom } from '../../../store';
 import { remoteServerConfigAtom } from '../../../atoms';
@@ -9,6 +9,8 @@ import { isBridgeAlive } from '../../../services/mcpBrain';
 import { BUILTIN_LLM_PRESET_ID } from '../../../services/builtinLlm';
 import { PERSONA_PRESETS } from '../../../types';
 import type { ActorProfile } from '../../../types';
+import { resolveLook, seedFromId } from '../../../utils/avatarLook';
+import { AvatarLookEditor } from '../AvatarLookEditor';
 import { ActionButton, BackButton, OptionCard, PixelSelect, PixelSlider, pixelInputClass } from '../../ui/pixel';
 import type { SubPage } from '../constants';
 
@@ -51,8 +53,9 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
     }, [mcpActorSelected]);
 
     if (!actor) return null;
-    const llm = llmPresets.find(p => p.id === actor.llmPresetId);
     const isNarrator = actor.id === config.narratorActorId;
+    // 未显式配置过形象时，用 id 派出一个稳定 seed 做预览（同一个人每次进来看到的是同一张脸）
+    const actorLook = resolveLook(actor.look, seedFromId(actor.id));
     const tts = ttsPresets.find(t => t.id === actor.ttsPresetId);
 
     const updateActor = (id: string, updates: Partial<ActorProfile>) => setActors(p => p.map(i => i.id === id ? { ...i, ...updates } : i));
@@ -73,9 +76,9 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                 <span className="text-sm" style={{ color: 'var(--color-muted)' }}>{isNarrator ? '设置上帝' : '编辑玩家'}</span>
             </div>
 
-            <div className="rounded-none border-[3px] p-5" style={{ background: 'var(--voxel-wood)', borderColor: 'var(--color-border)' }}>
+            <div className="rounded-none border-[3px] p-5" style={{ background: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
                 <div className="mb-5">
-                    <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>
+                    <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>
                         {isNarrator ? '旁白称呼' : '玩家名称'}
                     </label>
                     <div className="flex gap-2">
@@ -84,12 +87,12 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                         <button onClick={() => updateActor(actor.id, { name: randomVillagerName(actor.name) })}
                             title="随机起名"
                             className="shrink-0 w-[52px] rounded-none border-[3px] text-xl transition-all active:scale-95"
-                            style={{ background: 'var(--voxel-wood)', borderColor: 'var(--color-border)' }}>🎲</button>
+                            style={{ background: 'var(--color-card)', borderColor: 'var(--color-border)' }}>🎲</button>
                     </div>
                 </div>
 
                 <div className="mb-5">
-                    <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>大脑 (Brain)</label>
+                    <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>大脑 (Brain)</label>
                     <div className="grid grid-cols-2 gap-3">
                         <OptionCard active={(actor.brain ?? 'llm') === 'llm'} onClick={() => updateActor(actor.id, { brain: 'llm' })}>
                             <div className="p-3 text-center text-sm font-bold"
@@ -107,14 +110,14 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                     {actor.brain === 'mcp' && (
                         <div className="mt-2 flex items-start justify-between gap-3">
                             <div className="flex-1">
-                                <div className="mb-1 text-[10px] font-black" style={{
+                                <div className="mb-1 text-xs font-black" style={{
                                     color: mcpBridgeUp === null
                                         ? 'var(--color-muted)'
                                         : mcpBridgeUp ? 'var(--color-accent3)' : 'var(--color-accent2)',
                                 }}>
                                     外脑桥状态：{mcpBridgeUp === null ? '检测中…' : mcpBridgeUp ? '已连接（localhost:3015）' : '未运行'}
                                 </div>
-                                <p className="text-[10px] leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+                                <p className="text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>
                                     该分身的每次发言/投票/技能都交给外部 AI 决策。外脑超时会自动回退上方模型。
                                 </p>
                             </div>
@@ -146,7 +149,7 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                                 }
                                 setInviteCopiedName(actor.id);
                                 setTimeout(() => setInviteCopiedName(null), 2000);
-                            }} className="shrink-0 rounded-none border px-2 py-1 text-[10px] font-bold transition-all"
+                            }} className="shrink-0 rounded-none border px-2 py-1 text-xs font-bold transition-all"
                                 style={{ background: 'var(--color-accent1)', color: '#fff', borderColor: 'var(--color-border)' }}>
                                 {inviteCopiedName === actor.id ? '✓ 已复制' : '📋 复制邀请提示词'}
                             </button>
@@ -155,7 +158,7 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                 </div>
 
                 <div className="mb-5">
-                    <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>人设（直播整活）</label>
+                    <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>人设（直播整活）</label>
                     <PixelSelect
                         value={PERSONA_PRESETS.find(p => p.prompt === (actor.stylePrompt ?? ''))?.id ?? (actor.stylePrompt ? 'custom' : 'none')}
                         onChange={e => {
@@ -169,12 +172,23 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                         <option value="custom">自定义</option>
                     </PixelSelect>
                     {!PERSONA_PRESETS.some(p => p.prompt === (actor.stylePrompt ?? '')) && (actor.stylePrompt ?? '') !== '' && (
-                        <div className="mt-1 text-[10px] leading-snug" style={{ color: 'var(--color-muted)' }}>自定义人设：{actor.stylePrompt}</div>
+                        <div className="mt-1 text-xs leading-snug" style={{ color: 'var(--color-muted)' }}>自定义人设：{actor.stylePrompt}</div>
                     )}
                 </div>
+
+                {!isNarrator && (
+                    <div className="mb-6">
+                        <AvatarLookEditor
+                            value={actorLook}
+                            name={actor.name}
+                            onChange={look => updateActor(actor.id, { look })}
+                        />
+                    </div>
+                )}
+
                 <div className={clsx('grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6', actor.brain === 'mcp' && 'opacity-50')}>
                     <div>
-                        <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>基础模型 (回退用)</label>
+                        <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>基础模型 (回退用)</label>
                         <PixelSelect
                             value={actor.llmPresetId}
                             onChange={e => updateActor(actor.id, { llmPresetId: e.target.value })}
@@ -198,7 +212,7 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                         </PixelSelect>
                     </div>
                     <div>
-                        <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent2)' }}>TTS 引擎 (语音)</label>
+                        <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent2)' }}>TTS 引擎 (语音)</label>
                         <PixelSelect
                             value={actor.ttsPresetId}
                             onChange={e => updateActor(actor.id, { ttsPresetId: e.target.value })}
@@ -210,7 +224,7 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                 </div>
 
                 <div className="rounded-none border-[3px] p-4" style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)' }}>
-                    <label className="block text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: 'var(--color-accent1)' }}>音色设置 (Voice)</label>
+                    <label className="block text-xs font-bold uppercase tracking-wider mb-3" style={{ color: 'var(--color-accent1)' }}>音色设置 (Voice)</label>
 
                     {tts?.provider === 'edge-tts' && voices.length > 0 && (
                         <div className="mb-4">
@@ -244,21 +258,21 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                                 actor.voiceId, `test-${Date.now()}`, tts, undefined, undefined,
                                 config.ttsSpeed || 1.0, remoteConfig, actor.fineTune
                             );
-                        }} className="px-4 py-2 text-xs rounded-none font-bold transition-all active:scale-[0.98] bg-[var(--color-accent1)] hover:brightness-110 text-white shadow-[4px_4px_0_var(--voxel-ink)] shrink-0">
+                        }} className="px-4 py-2 text-xs rounded-none font-bold transition-all active:scale-[0.98] bg-[var(--color-accent1)] hover:brightness-110 text-[var(--voxel-ink)] shadow-[4px_4px_0_var(--voxel-ink)] shrink-0">
                             试听
                         </button>
                     </div>
 
                     {tts && (
-                        <div className="mt-4 p-3 rounded-none border-[3px]" style={{ background: 'var(--voxel-wood)', borderColor: 'var(--color-border)' }}>
+                        <div className="mt-4 p-3 rounded-none border-[3px]" style={{ background: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--color-muted)' }}>🎛️ 玩家语音微调</span>
+                                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--color-muted)' }}>🎛️ 玩家语音微调</span>
                                 {actor.fineTune && (
                                     <button onClick={() => updateActor(actor.id, { fineTune: undefined })}
-                                        className="text-[10px] font-bold transition-colors" style={{ color: 'var(--color-muted)' }}>重置</button>
+                                        className="text-xs font-bold transition-colors" style={{ color: 'var(--color-muted)' }}>重置</button>
                                 )}
                             </div>
-                            <p className="text-[9px] mb-2" style={{ color: 'var(--color-muted)' }}>覆盖引擎默认值，为此玩家单独定制语音效果</p>
+                            <p className="text-xs mb-2" style={{ color: 'var(--color-muted)' }}>覆盖引擎默认值，为此玩家单独定制语音效果</p>
                             {tts.provider === 'edge-tts' && (
                                 <div className="space-y-2">
                                     <PixelSlider
@@ -283,7 +297,7 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
 
                     {tts?.provider === 'edge-tts' && (
                         <div className="mt-4">
-                            <label className="block text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--color-muted)' }}>推荐音色</label>
+                            <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--color-muted)' }}>推荐音色</label>
                             <div className="flex flex-wrap gap-2">
                                 {[
                                     { id: 'zh-CN-XiaoxiaoNeural', name: '晓晓 (女)' },
@@ -294,7 +308,7 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                                     { id: 'en-US-AriaNeural', name: 'Aria (EN-F)' },
                                 ].map(v => (
                                     <button key={v.id} onClick={() => updateActor(actor.id, { voiceId: v.id })}
-                                        className={clsx('px-3 py-1.5 rounded-none text-[10px] font-bold transition-all border',
+                                        className={clsx('px-3 py-1.5 rounded-none text-xs font-bold transition-all border',
                                             actor.voiceId === v.id ? '' : '')}
                                         style={{
                                             background: actor.voiceId === v.id ? 'var(--color-accent1)' : 'var(--voxel-wood)',
@@ -308,7 +322,7 @@ export const ActorEditPage = ({ subPage, setSubPage }: ActorEditPageProps) => {
                         </div>
                     )}
 
-                    <p className="text-[10px] mt-3 ml-1 leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+                    <p className="text-xs mt-3 ml-1 leading-relaxed" style={{ color: 'var(--color-muted)' }}>
                         {tts?.provider === 'edge-tts' && '使用微软 Edge TTS 引擎。同步后可选择全量音色。'}
                         {!tts?.provider && '请先选择 TTS 引擎。'}
                     </p>

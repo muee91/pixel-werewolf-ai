@@ -1,4 +1,6 @@
 // Role Definitions
+import type { AvatarLook } from './utils/avatarLook';
+
 export enum Role {
     WEREWOLF = 'WEREWOLF',
     VILLAGER = 'VILLAGER',
@@ -192,6 +194,8 @@ export interface Player {
     rolePrompt: string;
     isSpeaking: boolean;
     actorId: string; // Link to ActorProfile
+    /** 本局形象：开局时从分身复制；缺省则按 avatarSeed 派生（2D 与 3D 共用同一份） */
+    look?: AvatarLook;
     // Abilities status
     potions?: {
         cure: boolean;
@@ -280,6 +284,8 @@ export interface ActorProfile {
     voiceId: string;
     stylePrompt: string;
     fineTune?: TTSFineTune;
+    /** 形象（2D 像素造型 + 3D 体型/发型/配色）。缺省按座位 seed 派生。 */
+    look?: AvatarLook;
 }
 
 // Global API Configuration (Reduced scope)
@@ -376,7 +382,6 @@ export interface GameRules {
     sheriffElection: boolean;
     sheriffVoteWeight: number;
     voteDetailPublic: boolean;
-    doubleExplodeNoSheriff: boolean;
     witchSelfSave: boolean | 'FIRST_NIGHT';
     witchSameNight: boolean;
     guardCannotSameTarget: boolean;
@@ -412,6 +417,8 @@ export interface GameConfig {
     sheriffEnabled: boolean;
     voteDetailPublic: boolean;
     rules: GameRules;
+    /** 人类输入等待上限（毫秒），缺省 120000；引擎与输入面板倒计时共用 */
+    humanInputTimeoutMs?: number;
 }
 
 export interface PlayerScore {
@@ -523,7 +530,6 @@ export const DEFAULT_GAME_RULES: GameRules = {
     sheriffElection: true,
     sheriffVoteWeight: 1.5,
     voteDetailPublic: false,
-    doubleExplodeNoSheriff: true,
     witchSelfSave: 'FIRST_NIGHT',
     witchSameNight: false,
     guardCannotSameTarget: true,
@@ -555,8 +561,8 @@ export const GAME_PRESETS: GamePreset[] = [
     {
         key: '9-v1',
         label: '经典标准局',
-        description: '全网最火的标准配置：3狼人、3村民，神职为预言家、女巫、猎人，攻守平衡。',
-        icon: 'mc:sword',
+        description: '最常见的标准配置：3狼人、3村民，神职为预言家、女巫、猎人，攻守平衡。',
+        icon: 'tile:sword',
         playerCount: 9,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -565,7 +571,6 @@ export const GAME_PRESETS: GamePreset[] = [
         ],
         rules: createRules({
             sheriffElection: true,
-            doubleExplodeNoSheriff: true,
             witchSelfSave: true,
             witchSameNight: false,
             hunterCanShootWhenPoisoned: false,
@@ -577,7 +582,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '9-guard',
         label: '守卫进阶局',
         description: '把猎人换成守卫：3狼人、3村民，神职为预言家、女巫、守卫。女巫与守卫可组成双救体系。',
-        icon: 'mc:shield',
+        icon: 'tile:shield',
         playerCount: 9,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -586,7 +591,6 @@ export const GAME_PRESETS: GamePreset[] = [
         ],
         rules: createRules({
             sheriffElection: true,
-            doubleExplodeNoSheriff: true,
             witchSelfSave: true,
             witchSameNight: false,
             guardCannotSameTarget: true,
@@ -599,7 +603,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-v1',
         label: '经典标准局',
         description: '经典的十二人配置：4狼人、4村民，神职为预言家、女巫、猎人、白痴。',
-        icon: 'mc:sword',
+        icon: 'tile:sword',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -608,7 +612,6 @@ export const GAME_PRESETS: GamePreset[] = [
         ],
         rules: createRules({
             sheriffElection: true,
-            doubleExplodeNoSheriff: true,
             witchSelfSave: 'FIRST_NIGHT',
             witchSameNight: false,
             hunterCanShootWhenPoisoned: false,
@@ -620,7 +623,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-guard',
         label: '守卫标准局',
         description: '经典的十二人守卫配置：4狼人、4村民，神职为预言家、女巫、猎人、守卫。',
-        icon: 'mc:shield',
+        icon: 'tile:shield',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -629,7 +632,6 @@ export const GAME_PRESETS: GamePreset[] = [
         ],
         rules: createRules({
             sheriffElection: true,
-            doubleExplodeNoSheriff: true,
             witchSelfSave: false,
             witchSameNight: false,
             guardCannotSameTarget: true,
@@ -644,7 +646,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '6-seer-witch',
         label: '新手入门局',
         description: '六人入门配置：2狼人、2村民，神职为预言家、女巫。无警长、无自爆，女巫可以自救。',
-        icon: 'mc:bread',
+        icon: 'tile:bread',
         playerCount: 6,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF,
@@ -654,7 +656,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: false,
             wolfExplodeEnabled: false,
-            doubleExplodeNoSheriff: false,
             doubleExplodeSwallowBadge: false,
             witchSelfSave: true,
             witchSameNight: false,
@@ -666,7 +667,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '6-seer-only',
         label: '极简推理局',
         description: '六人极简配置：2狼人、3村民，神职仅有预言家。没有女巫与警长，纯靠逻辑推演。',
-        icon: 'mc:bookFilled',
+        icon: 'tile:bookFilled',
         playerCount: 6,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF,
@@ -676,7 +677,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: false,
             wolfExplodeEnabled: false,
-            doubleExplodeNoSheriff: false,
             doubleExplodeSwallowBadge: false,
             firstNightLastWords: true,
             votedOutLastWords: true
@@ -687,7 +687,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '7-standard',
         label: '主流标准局',
         description: '七人标准配置：3狼人、2村民，神职为预言家、女巫。有警长，狼人可自爆。',
-        icon: 'mc:torch',
+        icon: 'tile:torch',
         playerCount: 7,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -697,7 +697,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: false,
             doubleExplodeSwallowBadge: false,
             witchSelfSave: true,
             firstNightLastWords: true,
@@ -708,7 +707,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '7-demon-hunter',
         label: '猎魔人变种局',
         description: '七人变种配置：3狼人、2村民，神职为预言家、猎魔人。有警长，狼人可自爆。',
-        icon: 'mc:bow',
+        icon: 'tile:bow',
         playerCount: 7,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -718,7 +717,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: false,
             doubleExplodeSwallowBadge: false,
             demonHunterHunt: true,
             firstNightLastWords: true,
@@ -728,9 +726,9 @@ export const GAME_PRESETS: GamePreset[] = [
     // --- 8人局 ---
     {
         key: '8-standard',
-        label: '官方标准局',
-        description: '八人官方配置：3狼人、3村民，神职为预言家、女巫。有警长，狼人可自爆，双爆吞警徽。',
-        icon: 'mc:torch',
+        label: '标准局（预置）',
+        description: '八人标准配置：3狼人、3村民，神职为预言家、女巫。有警长，狼人可自爆，双爆吞警徽。',
+        icon: 'tile:torch',
         playerCount: 8,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -740,7 +738,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: true,
             firstNightLastWords: true,
@@ -751,7 +748,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '8-seer-witch-hunter',
         label: '竞技猎人局',
         description: '八人竞技配置：3狼人、2村民，神职为预言家、女巫、猎人。有警长，可自爆双爆吞警徽。',
-        icon: 'mc:bow',
+        icon: 'tile:bow',
         playerCount: 8,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -761,7 +758,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: true,
             hunterCanShootWhenPoisoned: false,
@@ -774,7 +770,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '10-standard',
         label: '均衡标准局',
         description: '十人标准配置：3狼人、4村民，神职为预言家、女巫、猎人。女巫不可自救。',
-        icon: 'mc:torch',
+        icon: 'tile:torch',
         playerCount: 10,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -784,7 +780,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: false,
             hunterCanShootWhenPoisoned: false,
@@ -796,7 +791,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '10-seer-witch-hunter-guard',
         label: '四神守卫局',
         description: '十人守卫配置：3狼人、3村民，神职为预言家、女巫、猎人、守卫。女巫不可自救，守卫可以连续守护。',
-        icon: 'mc:shield',
+        icon: 'tile:shield',
         playerCount: 10,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -806,7 +801,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: false,
             guardCannotSameTarget: false,
@@ -821,7 +815,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '11-balanced',
         label: '平衡配置局',
         description: '十一人平衡配置：4狼人、4村民，神职为预言家、女巫、猎人。女巫不可自救。',
-        icon: 'mc:emerald',
+        icon: 'tile:emerald',
         playerCount: 11,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -831,7 +825,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: false,
             hunterCanShootWhenPoisoned: false,
@@ -843,7 +836,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '11-wolf-king-guard',
         label: '狼王守卫局',
         description: '十一人狼王守卫配置：狼人三名加狼王、村民三名，神职为预言家、女巫、猎人、守卫。女巫不可自救。',
-        icon: 'mc:bone',
+        icon: 'tile:bone',
         playerCount: 11,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WOLF_KING,
@@ -853,7 +846,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: false,
             guardCannotSameTarget: true,
@@ -868,7 +860,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-wolf-king-guard',
         label: '狼王守卫局',
         description: '十二人狼王守卫配置：狼人三名加狼王、村民四名，神职为预言家、女巫、猎人、守卫。狼王阵亡时可开枪。',
-        icon: 'mc:bone',
+        icon: 'tile:bone',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WOLF_KING,
@@ -878,7 +870,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: 'FIRST_NIGHT',
             witchSameNight: false,
@@ -893,7 +884,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-stone-ghost-gravekeeper',
         label: '石像鬼守墓人局',
         description: '十二人石像鬼守墓人配置：狼人三名加石像鬼、村民四名，神职为预言家、女巫、猎人、守墓人。',
-        icon: 'mc:shovel',
+        icon: 'tile:shovel',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.STONE_GHOST,
@@ -903,7 +894,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: 'FIRST_NIGHT',
             witchSameNight: false,
@@ -918,7 +908,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-white-wolf-king-knight',
         label: '白狼王骑士局',
         description: '十二人白狼王骑士配置：狼人三名加白狼王、村民四名，神职为预言家、女巫、猎人、骑士。白狼王自爆时可带人。',
-        icon: 'mc:sword',
+        icon: 'tile:sword',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WHITE_WOLF_KING,
@@ -928,7 +918,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: 'FIRST_NIGHT',
             witchSameNight: false,
@@ -943,7 +932,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-blood-moon-demon-hunter',
         label: '血月使徒猎魔人局',
         description: '十二人血月使徒猎魔人配置：狼人三名加血月使徒、村民四名，神职为预言家、女巫、猎人、猎魔人。',
-        icon: 'mc:bow',
+        icon: 'tile:bow',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.BLOOD_MOON_DISCIPLE,
@@ -953,7 +942,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: 'FIRST_NIGHT',
             witchSameNight: false,
@@ -968,7 +956,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-cupid',
         label: '丘比特情侣局',
         description: '十二人丘比特情侣配置：4狼人、4村民，神职为预言家、女巫、猎人、丘比特。情侣构成第三方阵营。',
-        icon: 'mc:heart',
+        icon: 'tile:heart',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -978,7 +966,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: 'FIRST_NIGHT',
             witchSameNight: false,
@@ -993,7 +980,7 @@ export const GAME_PRESETS: GamePreset[] = [
         key: '12-miracle-merchant',
         label: '奇迹商人局',
         description: '十二人奇迹商人配置：4狼人、4村民，神职为预言家、女巫、猎人、奇迹商人。商人把技能交给狼人时会阵亡。',
-        icon: 'mc:emerald',
+        icon: 'tile:emerald',
         playerCount: 12,
         roles: [
             Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
@@ -1003,7 +990,6 @@ export const GAME_PRESETS: GamePreset[] = [
         rules: createRules({
             sheriffElection: true,
             wolfExplodeEnabled: true,
-            doubleExplodeNoSheriff: true,
             doubleExplodeSwallowBadge: true,
             witchSelfSave: 'FIRST_NIGHT',
             witchSameNight: false,
@@ -1107,8 +1093,8 @@ export const DEFAULT_GOD_STATE: GodState = {
     sheriffElectionDone: false,
     sheriffVoteRound: 1,
     sheriffTieCandidates: [],
-    voteTieCandidates: null,
-    voteTieRound: null,
+    voteTieCandidates: undefined,
+    voteTieRound: undefined,
     pendingDeathActionIds: [],
     deathActionResume: undefined,
     pendingNightDeathIds: [],

@@ -5,6 +5,7 @@ import { Capacitor } from '@capacitor/core';
 import { edgeTtsVoicesAtom, ttsPresetsAtom } from '../../../store';
 import { ActionButton, BackButton, PixelSelect, PixelSlider, SettingsInput, pixelInputClass } from '../../ui/pixel';
 import type { SubPage } from '../constants';
+import { showToast } from '../../../utils/notify';
 
 interface TtsEditPageProps {
     subPage: Extract<SubPage, { type: 'TTS_EDIT' }>;
@@ -32,7 +33,7 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
         setIsSyncing(true);
         try {
             if (Capacitor.isNativePlatform()) {
-                alert('Android 客户端暂不支持音色同步，请在浏览器中使用此功能。');
+                showToast('Android 客户端暂不支持音色同步，请在浏览器中使用此功能。', 'info');
                 setIsSyncing(false);
                 return;
             }
@@ -40,13 +41,13 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
             if (resp.ok) {
                 const data = await resp.json();
                 setVoices(data);
-                alert(`同步成功！已发现 ${data.length} 个音色。`);
+                showToast(`同步成功！已发现 ${data.length} 个音色。`, 'success');
             } else {
-                alert('同步失败，请确保后端服务已启动。');
+                showToast('同步失败，请确保后端服务已启动。', 'error');
             }
         } catch (e) {
             console.error(e);
-            alert('网络错误，请检查后端运行状态。');
+            showToast('网络错误，请检查后端运行状态。', 'error');
         } finally {
             setIsSyncing(false);
         }
@@ -71,10 +72,10 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
                 <span className="text-sm" style={{ color: 'var(--color-muted)' }}>TTS 引擎详情</span>
             </div>
 
-            <div className="rounded-none border-[3px] p-5" style={{ background: 'var(--voxel-wood)', borderColor: 'var(--color-accent1)' }}>
+            <div className="rounded-none border-[3px] p-5" style={{ background: 'var(--color-card)', borderColor: 'var(--color-accent1)' }}>
                 <div className="flex items-center gap-3 mb-5">
                     <div className="w-10 h-10 rounded-none flex items-center justify-center text-lg"
-                        style={{ background: 'var(--color-accent1)', color: '#fff' }}>
+                        style={{ background: 'var(--color-accent1)', color: 'var(--voxel-ink)' }}>
                         🌐
                     </div>
                     <div className="flex-1">
@@ -84,7 +85,7 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
                         </p>
                     </div>
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-none text-xs font-bold"
-                        style={{ background: 'var(--color-accent1)', color: '#fff', opacity: 0.9 }}>
+                        style={{ background: 'var(--color-accent1)', color: 'var(--voxel-ink)' }}>
                         可用
                     </span>
                 </div>
@@ -105,7 +106,7 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
                             ))}
                         </PixelSelect>
                     ) : (
-                        <p className="text-[11px] mb-3" style={{ color: 'var(--color-muted)' }}>暂无音色列表，请先同步音色库</p>
+                        <p className="text-xs mb-3" style={{ color: 'var(--color-muted)' }}>暂无音色列表，请先同步音色库</p>
                     )}
                     <ActionButton size="sm" className="w-full" disabled={isSyncing}
                         onClick={syncVoices}
@@ -114,7 +115,7 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
                     </ActionButton>
 
                     <div className="mt-3">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider mb-1 ml-1" style={{ color: 'var(--color-muted)' }}>手动输入音色 ID</label>
+                        <label className="block text-xs font-bold uppercase tracking-wider mb-1 ml-1" style={{ color: 'var(--color-muted)' }}>手动输入音色 ID</label>
                         <input type="text" value={previewVoiceId}
                             onChange={e => setPreviewVoiceId(e.target.value)}
                             className={clsx(pixelInputClass, 'p-3 text-xs')}
@@ -149,29 +150,29 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
                                         await audio.play();
                                     } catch (playError) {
                                         console.warn("Audio play failed:", playError);
-                                        alert("无法播放声音，请先与页面交互（如点击空白处）后再试。");
+                                        showToast("无法播放声音，请先与页面交互（如点击空白处）后再试。", "warning");
                                         setIsPreviewPlaying(false);
                                     }
                                 } else {
                                     const err = await resp.text();
-                                    alert(`试听失败: ${err}`);
+                                    showToast(`试听失败: ${err}`, 'error');
                                     setIsPreviewPlaying(false);
                                 }
                             } catch (e) {
-                                alert(`试听出错: ${e}`);
+                                showToast(`试听出错: ${e}`, 'error');
                                 setIsPreviewPlaying(false);
                             }
                         }} disabled={isPreviewPlaying}
-                            className="px-4 py-2 text-xs rounded-none font-bold transition-all active:scale-[0.98] bg-[var(--color-accent1)] hover:brightness-110 text-white shadow-[4px_4px_0_var(--voxel-ink)] disabled:opacity-40 disabled:cursor-not-allowed shrink-0">
+                            className="px-4 py-2 text-xs rounded-none font-bold transition-all active:scale-[0.98] bg-[var(--color-accent1)] hover:brightness-110 text-[var(--voxel-ink)] shadow-[4px_4px_0_var(--voxel-ink)] disabled:opacity-40 disabled:cursor-not-allowed shrink-0">
                             {isPreviewPlaying ? (
                                 <span className="flex items-center gap-1.5">
-                                    <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    <span className="w-3 h-3 border-2 border-[var(--voxel-ink)] border-t-transparent rounded-full animate-spin" />
                                     播放中
                                 </span>
                             ) : '▶ 试听'}
                         </button>
                     </div>
-                    {previewVoiceId && <p className="text-[10px] mt-2 ml-1" style={{ color: 'var(--color-muted)' }}>当前音色：{previewVoiceId}</p>}
+                    {previewVoiceId && <p className="text-xs mt-2 ml-1" style={{ color: 'var(--color-muted)' }}>当前音色：{previewVoiceId}</p>}
                 </div>
 
                 <div className="mt-5 rounded-none border-[3px] p-4" style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)' }}>
@@ -193,7 +194,7 @@ export const TtsEditPage = ({ subPage, setSubPage }: TtsEditPageProps) => {
                         />
                     </div>
                     <button onClick={() => updateTts(tts.id, { fineTune: undefined })}
-                        className="mt-3 text-[10px] font-bold transition-colors"
+                        className="mt-3 text-xs font-bold transition-colors"
                         style={{ color: 'var(--color-muted)' }}>重置为默认值</button>
                 </div>
             </div>

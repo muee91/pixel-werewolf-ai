@@ -65,6 +65,8 @@ export interface UIConfig {
   personaTagsEnabled: boolean;
   /** 每局给 AI 分身随机抽取人设 */
   randomPersonaEachGame: boolean;
+  /** 3D 视角的场景（森林/雪原/秋林/荒漠/地牢），见 voxel3d/biomes.ts */
+  sceneId?: string;
 }
 
 export const THEME_DEFAULTS: Record<ThemeId, Omit<UIConfig, 'themeId'>> = {
@@ -82,6 +84,7 @@ export const THEME_DEFAULTS: Record<ThemeId, Omit<UIConfig, 'themeId'>> = {
     bgmEnabled: true,
     personaTagsEnabled: true,
     randomPersonaEachGame: false,
+    sceneId: 'forest-camp',
   },
 };
 

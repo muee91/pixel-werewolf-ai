@@ -54,8 +54,29 @@ function notifyWaiters(entry) {
     }
 }
 
+// ── 同机来源校验 ─────────────────────────────────────────
+// 浏览器对跨源 POST 必带 Origin：外站网页借房主浏览器打 127.0.0.1 会在这里被拒
+//（恶意页面也能用沙箱 iframe 伪装出 Origin: null，所以非法 Origin 一并拒绝）。
+// 非浏览器调用（standalone-agent.mjs、curl、测试）不带 Origin，不受影响。
+const LOOPBACK_ORIGIN_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+function isSameMachineOrigin(req) {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    try {
+        const originHost = new URL(origin).host;
+        return LOOPBACK_ORIGIN_RE.test(originHost) || originHost === req.headers.host;
+    } catch {
+        return false;
+    }
+}
+
 // ── 引擎侧端点(不变) ─────────────────────────────────────
 const server = http.createServer((req, res) => {
+    if (!isSameMachineOrigin(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: '跨源请求被拒绝：枢纽仅接受本机来源' }));
+        return;
+    }
     const cors = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',

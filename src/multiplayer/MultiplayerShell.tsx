@@ -38,13 +38,15 @@ export const MultiplayerShell: React.FC<MultiplayerShellProps> = ({
                 <div className="flex items-start gap-3 min-w-0">
                     <button
                         onClick={onBack}
-                        className="shrink-0 border-[3px] px-3 py-2 text-xs font-black transition-all active:translate-x-[2px] active:translate-y-[2px]"
+                        className="flex shrink-0 min-h-11 items-center gap-1 border-[3px] py-2 pl-1.5 pr-2.5 text-xs font-black transition-all active:translate-x-[2px] active:translate-y-[2px]"
                         style={{ borderColor: 'var(--voxel-ink)', color: 'var(--voxel-ink)', background: 'var(--voxel-paper)', boxShadow: '3px 3px 0 var(--voxel-ink)' }}
                     >
+                        {/* 与历史/设置页的返回同一个箭头，别让「回主页」在这三个页面有三种长相 */}
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
                         {backLabel}
                     </button>
                     <div className="min-w-0">
-                        <div className="text-[11px] font-black uppercase tracking-widest" style={{ color: 'var(--voxel-torch)' }}>
+                        <div className="text-xs font-black uppercase tracking-widest" style={{ color: 'var(--voxel-torch)' }}>
                             Multiplayer
                         </div>
                         <div className="mt-1 text-lg sm:text-xl font-black truncate" style={{ color: 'var(--voxel-paper)' }}>{title}</div>

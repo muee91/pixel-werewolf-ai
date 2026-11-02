@@ -1,8 +1,11 @@
 // 内置小模型(0.5B 级 GGUF):wllama(WASM llama.cpp)推理,免编译跨平台。
 // 首次使用时从模型源下载一次(约 400~500MB,由 wllama CacheManager 持久缓存),
 // 之后完全离线可用;云端 Key / 本机 Ollama / 离线大脑之外的"真思考"兜底层。
-import { Wllama } from '@wllama/wllama';
-import wasmUrl from '@wllama/wllama/esm/wasm/wllama.wasm?url';
+// wllama 运行时与 wasm(约 321KB JS)按需动态加载:本模块被引擎静态引用,
+// 但只有真正下载/生成时才拉取重量级 chunk,外部 API 用户的对局零额外下载。
+
+type WllamaModule = typeof import('@wllama/wllama');
+type WllamaInstance = import('@wllama/wllama').Wllama;
 
 // 主源国内可达(ModelScope),备源 HuggingFace
 const MODEL_SOURCES = [
@@ -24,7 +27,8 @@ export interface BuiltinLlmSnapshot {
     error: string;
 }
 
-let wllama: Wllama | null = null;
+let wllama: WllamaInstance | null = null;
+let wllamaRuntime: Promise<{ Wllama: WllamaModule['Wllama']; wasmUrl: string }> | null = null;
 let status: BuiltinLlmStatus = 'idle';
 let progress = 0;
 let errorMsg = '';
@@ -54,8 +58,23 @@ export const getBuiltinLlmSnapshot = (): BuiltinLlmSnapshot => snapshotCache;
 export const isBuiltinLlmReady = (): boolean =>
     status === 'ready' || localStorage.getItem(DOWNLOADED_FLAG) === '1';
 
-const ensureWllama = (): Wllama => {
-    if (!wllama) wllama = new Wllama({ default: wasmUrl });
+const loadWllamaRuntime = (): Promise<{ Wllama: WllamaModule['Wllama']; wasmUrl: string }> => {
+    if (!wllamaRuntime) {
+        // 失败时清掉缓存的 rejected promise,换源重试才能重新加载
+        wllamaRuntime = Promise.all([
+            import('@wllama/wllama'),
+            import('@wllama/wllama/esm/wasm/wllama.wasm?url'),
+        ]).then(([mod, wasm]) => ({ Wllama: mod.Wllama, wasmUrl: wasm.default }))
+            .catch((error) => { wllamaRuntime = null; throw error; });
+    }
+    return wllamaRuntime;
+};
+
+const ensureWllama = async (): Promise<WllamaInstance> => {
+    if (!wllama) {
+        const { Wllama, wasmUrl } = await loadWllamaRuntime();
+        wllama = new Wllama({ default: wasmUrl });
+    }
     return wllama;
 };
 
@@ -63,7 +82,7 @@ const ensureWllama = (): Wllama => {
 export const restoreBuiltinModel = async (): Promise<void> => {
     if (status === 'ready' || status === 'loading') return;
     setStatus('loading');
-    const wl = ensureWllama();
+    const wl = await ensureWllama();
     await wl.loadModelFromUrl(MODEL_SOURCES[1], {});
     setStatus('ready');
 };
@@ -75,7 +94,7 @@ export const downloadBuiltinModel = async (): Promise<void> => {
     for (const url of MODEL_SOURCES) {
         try {
             setStatus('downloading', 0);
-            const wl = ensureWllama();
+            const wl = await ensureWllama();
             await wl.loadModelFromUrl(url, {
                 progressCallback: ({ loaded, total }) => {
                     if (total > 0) setStatus('downloading', loaded / total);
@@ -99,7 +118,7 @@ export const builtinGenerate = async (
 ): Promise<string> => {
     if (!isBuiltinLlmReady()) throw new Error('内置模型未就绪');
     if (status !== 'ready') await restoreBuiltinModel();
-    const wl = ensureWllama();
+    const wl = await ensureWllama();
     const res = await wl.createChatCompletion({
         messages: messages as never[],
         max_tokens: opts?.maxTokens ?? 160,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { McIcon } from '../game/voxel/primitives';
+import { CampIcon } from '../game/voxel/primitives';
 
 type ScreenTarget = 'MULTIPLAYER' | 'RULES' | 'HISTORY' | 'SETTINGS' | 'AGENT';
 
@@ -43,7 +43,7 @@ export const HomeBottomNav: React.FC<HomeBottomNavProps> = ({
                         className={itemClassName}
                         style={itemStyle}
                     >
-                        {item.icon ? <McIcon icon={item.icon} px={2} className={iconClassName} style={iconStyle} /> : null}
+                        {item.icon ? <CampIcon icon={item.icon} px={2} className={iconClassName} style={iconStyle} /> : null}
                         <span className={labelClassName} style={labelStyle}>
                             {item.label}
                         </span>

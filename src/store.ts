@@ -6,12 +6,9 @@ import {
     globalApiConfigAtom, appScreenAtom, isAutoPlayAtom, isTheaterModeAtom,
     isPlayingAudioAtom, currentSpeakerIdAtom, speakingQueueAtom,
     timelineAtom, replaySourceLogsAtom, isReplayModeAtom, areRolesVisibleAtom,
-    gameArchivesAtom, isProcessingAtom, agentMessagesAtom,
+    gameArchivesAtom, isProcessingAtom,
     lastSavedArchiveAtom,
-    llmPresetsAtom, ttsPresetsAtom,
     isHumanModeAtom, humanPlayerSeatAtom, userInputAtom, minimizedGameAtom,
-    debugGodViewAtom,
-    debugModeAtom, debugLogPanelOpenAtom,
     replayPausedAtom, replayProgressAtom, replayPerspectiveAtom, humanInputResolverMapAtom, cancelHumanInputAtom,
     gameResultAtom, gameEvaluationAtom,
     multiplayerRoleAtom, aiHostedPlayersAtom, multiplayerConnectionAtom, multiplayerStateAtom,
@@ -21,9 +18,11 @@ import {
 import {
     GamePhase, Player, GameLog, GameSnapshot,
     GAME_PRESETS, Role, PlayerStatus, ROLE_INFO, GameArchive,
-    DEFAULT_PHASE_PROMPTS, DEFAULT_GOD_STATE, GodState, pickRandomPersona
+    DEFAULT_PHASE_PROMPTS, DEFAULT_GOD_STATE, GodState, pickRandomPersona,
+    type GameRules,
 } from './types';
 import { CURRENT_ARCHIVE_SCHEMA_VERSION, normalizeGameArchive, sanitizeTimelineForArchive } from './utils/archive';
+import { resolveLook, SEAT_LOOK_SEED_OFFSET } from './utils/avatarLook';
 import type { SyncedGameState } from './multiplayer/types';
 import { DEFAULT_DISCONNECT_GRACE_MS } from './multiplayer/constants';
 
@@ -94,13 +93,36 @@ export const saveSnapshotAtom = atom(null, (get, set) => {
     }
 });
 
-export const initGameAtom = atom(null, (get, set, presetKey: string) => {
+import { llmUsageAtom } from './atoms';
+
+/**
+ * 开局参数：板子 + 开局前在首页改过的配置。
+ *
+ * 只传 presetKey 时行为与旧版完全一致（板子决定一切）。
+ * 传了 roles 就必须正好等于板子人数——人数对不上说明配置是脏的，
+ * 宁可回退板子默认，也不要发出一个少一张牌的局。
+ */
+export interface InitGamePayload {
+    presetKey: string;
+    roles?: Role[];
+    sheriffEnabled?: boolean;
+    rules?: Partial<GameRules>;
+}
+
+export const initGameAtom = atom(null, (get, set, payload: string | InitGamePayload) => {
+    const options: InitGamePayload = typeof payload === 'string' ? { presetKey: payload } : payload;
+    const presetKey = options.presetKey;
+    // 新的一局：模型用量读数归零
+    set(llmUsageAtom, { calls: 0, promptTokens: 0, completionTokens: 0, reasoningTokens: 0, totalMs: 0 });
     const preset = GAME_PRESETS.find(p => p.key === presetKey);
     if (!preset) {
         console.error(`未找到预设板子: ${presetKey}`);
         return;
     }
     const playerCount = preset.playerCount;
+    const rules: GameRules = options.rules ? { ...preset.rules, ...options.rules } : preset.rules;
+    const roles = options.roles && options.roles.length === playerCount ? [...options.roles] : [...preset.roles];
+    const sheriffEnabled = options.sheriffEnabled ?? rules.sheriffElection;
     const allActors = get(actorProfilesAtom);
     const narratorId = get(globalApiConfigAtom).narratorActorId;
 
@@ -110,15 +132,15 @@ export const initGameAtom = atom(null, (get, set, presetKey: string) => {
     // Reset Config
     set(gameConfigAtom, (prev) => ({
         ...prev,
-        playerCount: preset.playerCount,
-        roles: preset.roles,
-        sheriffEnabled: preset.rules.sheriffElection,
-        voteDetailPublic: preset.rules.voteDetailPublic,
-        rules: preset.rules
+        playerCount,
+        roles,
+        sheriffEnabled,
+        voteDetailPublic: rules.voteDetailPublic,
+        rules: { ...rules, sheriffElection: sheriffEnabled }
     }));
 
     // Shuffle Roles
-    const shuffledRoles = [...preset.roles];
+    const shuffledRoles = [...roles];
     for (let i = shuffledRoles.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [shuffledRoles[i], shuffledRoles[j]] = [shuffledRoles[j], shuffledRoles[i]];
@@ -157,6 +179,7 @@ export const initGameAtom = atom(null, (get, set, presetKey: string) => {
             actorId: actor.id,
             potions,
             isHuman,
+            look: resolveLook(actor.look, i + SEAT_LOOK_SEED_OFFSET),
             displayName: isHuman ? '你' : actor.name,
             stylePrompt: isHuman ? undefined : (randomPersona ? pickRandomPersona().prompt : actor.stylePrompt),
         };
@@ -171,7 +194,7 @@ export const initGameAtom = atom(null, (get, set, presetKey: string) => {
         id: 'sys-init',
         turn: 1,
         phase: GamePhase.NIGHT_START,
-        content: `游戏开始。${playerCount} 人局 · ${preset.label}\n配置：${preset.roles.map(r => ROLE_INFO[r].label).join(' ')}`,
+        content: `游戏开始。${playerCount} 人局 · ${preset.label}${sheriffEnabled ? ' · 上警' : ' · 无警长'}\n配置：${roles.map(r => ROLE_INFO[r].label).join(' ')}`,
         timestamp: Date.now(),
         isSystem: true
     }]);
@@ -204,7 +227,7 @@ export const initGameAtom = atom(null, (get, set, presetKey: string) => {
 });
 
 // 联机模式开始游戏：根据预设人数填充 AI 玩家，然后启动引擎
-export const startMultiplayerGameAtom = atom(null, (get, set, { presetKey, roomPlayers, humanSeatNumber }: { presetKey: string; roomPlayers: { seatNumber: number | null; nickname: string; playerId: string; isHost: boolean }[]; humanSeatNumber?: number }) => {
+export const startMultiplayerGameAtom = atom(null, (get, set, { presetKey, roomPlayers }: { presetKey: string; roomPlayers: { seatNumber: number | null; nickname: string; playerId: string; isHost: boolean }[]; humanSeatNumber?: number }) => {
     const preset = GAME_PRESETS.find(p => p.key === presetKey);
     if (!preset) {
         console.error(`未找到预设板子: ${presetKey}`);
@@ -277,6 +300,7 @@ export const startMultiplayerGameAtom = atom(null, (get, set, { presetKey, roomP
             actorId: actor.id,
             potions,
             isHuman,
+            look: resolveLook(actor.look, i + SEAT_LOOK_SEED_OFFSET),
             displayName: roomPlayer?.nickname ?? actor.name,
             roomPlayerId: roomPlayer?.playerId ?? null,
             stylePrompt: isHuman ? undefined : (randomPersona ? pickRandomPersona().prompt : actor.stylePrompt),
@@ -529,6 +553,7 @@ export const setupMultiplayerGameAtom = atom(null, (get, set, { presetKey, roomP
             isSpeaking: false,
             actorId: actor.id,
             isHuman: !!isMe,
+            look: resolveLook(actor.look, i + SEAT_LOOK_SEED_OFFSET),
             displayName: roomPlayer?.nickname ?? actor.name,
             roomPlayerId: roomPlayer?.playerId ?? null
         };
@@ -628,7 +653,7 @@ export const applyHostGameStateAtom = atom(null, (get, set, gameState: SyncedGam
     }
 });
 
-export const hostExitGameAtom = atom(null, async (get, set, { roomId, playerId }: { roomId: string; playerId: string }) => {
+export const hostExitGameAtom = atom(null, async (get, set, _payload: { roomId: string; playerId: string }) => {
     try {
         sendWsMessage({ type: 'HOST_EXIT' });
     } catch (e) {
@@ -653,7 +678,8 @@ export const toggleAIHostingAtom = atom(null, (get, set, { seatNumber, enabled }
 
     const player = get(playersAtom).find(p => p.seatNumber === seatNumber);
     if (player) {
-        set(logsAtom, (prev) => [...prev, {
+        // 与 engineHelpers.appendLog 的 MAX_GAME_LOGS 同一封顶口径,防长局无上限增长
+        set(logsAtom, (prev) => [...prev.slice(-999), {
             id: `sys-ai-host-${seatNumber}-${Date.now()}`,
             turn: get(turnCountAtom),
             phase: get(gamePhaseAtom),

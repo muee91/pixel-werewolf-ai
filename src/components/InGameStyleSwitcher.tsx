@@ -4,12 +4,16 @@ import { createPortal } from 'react-dom';
 import { uiConfigAtom } from '../atoms';
 import { THEMES } from '../themes';
 import type { GameLayout, GameViewMode, PlayerCardStyle } from '../themes/types';
+import { GridIcon, CaretIcon } from './game/toolbarIcons';
+import { SCENE_IDS, SCENES, resolveSceneId } from './game/voxel3d/biomes';
 
 type Props = {
     placement?: 'top' | 'bottom';
+    /** 触发按钮尺寸：compact 贴 3D 顶栏(px-3 py-1.5)，tap 贴 2D 顶栏(≥44px 触控行高) */
+    size?: 'compact' | 'tap';
 };
 
-const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
+const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom', size = 'compact' }) => {
     const [uiConfig, setUiConfig] = useAtom(uiConfigAtom);
     const [open, setOpen] = useState(false);
     const [panelStyle, setPanelStyle] = useState<React.CSSProperties>({});
@@ -32,6 +36,10 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
 
     const updateViewMode = (gameViewMode: GameViewMode) => {
         setUiConfig(prev => ({ ...prev, gameViewMode }));
+    };
+
+    const updateScene = (sceneId: string) => {
+        setUiConfig(prev => ({ ...prev, sceneId }));
     };
 
     useLayoutEffect(() => {
@@ -109,15 +117,28 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
             <button
                 onClick={() => setOpen(v => !v)}
                 title="对局外观"
-                className="border-[3px] px-3 py-1.5 text-[11px] font-black shadow-[3px_3px_0_var(--voxel-ink)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
-                style={{ background: open ? 'var(--voxel-torch)' : 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)', color: 'var(--voxel-ink)' }}
+                aria-expanded={open}
+                aria-haspopup="dialog"
+                className="border-[3px] px-3 py-1.5 max-sm:px-2 text-xs font-black shadow-[3px_3px_0_var(--voxel-ink)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                style={{
+                    background: open ? 'var(--voxel-torch)' : 'var(--voxel-paper)',
+                    borderColor: 'var(--voxel-ink)',
+                    color: 'var(--voxel-ink)',
+                    ...(size === 'tap' ? { minHeight: '2.75rem', display: 'inline-flex', alignItems: 'center' } : null),
+                }}
             >
-                布局
+                <span className="flex items-center gap-1.5">
+                    <GridIcon />
+                    布局
+                    <CaretIcon />
+                </span>
             </button>
 
             {open && portalRoot && createPortal(
                 <div
                     ref={panelRef}
+                    role="dialog"
+                    aria-label="对局外观"
                     className="z-[90] overflow-y-auto p-3 shadow-2xl"
                     style={{
                         ...panelStyle,
@@ -129,12 +150,12 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
                     }}
                 >
                     <div className="mb-2 flex items-center justify-between gap-2">
-                        <div className="text-[11px] font-black tracking-widest" style={{ color: colors.accent1 }}>对局外观</div>
+                        <div className="text-xs font-black tracking-widest" style={{ color: colors.accent1 }}>对局外观</div>
                         <button onClick={() => setOpen(false)} className="px-1.5 text-xs font-black" style={{ color: colors.muted }}>×</button>
                     </div>
 
                     <div className="mb-3">
-                        <div className="mb-1.5 text-[10px] font-bold" style={{ color: colors.muted }}>对局视角</div>
+                        <div className="mb-1.5 text-xs font-bold" style={{ color: colors.muted }}>对局视角</div>
                         <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
                             {([['2d', '经典 2D'], ['3d', '3D RPG']] as const).map(([mode, label]) => {
                                 const active = uiConfig.gameViewMode === mode;
@@ -142,7 +163,7 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
                                     <button
                                         key={mode}
                                         onClick={() => updateViewMode(mode)}
-                                        className="min-w-0 px-2 py-2 text-[10px] font-bold leading-tight"
+                                        className="min-w-0 px-2 py-2 text-xs font-bold leading-tight"
                                         style={{
                                             background: active ? `${colors.accent1}22` : 'transparent',
                                             color: active ? colors.accent1 : colors.fg,
@@ -157,10 +178,40 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
                         </div>
                     </div>
 
-                    {/* 游戏布局只作用于经典 2D 视图（3D 场景固定为森林篝火），3D 下隐藏 */}
+                    {/* 3D 场景：原来只在主页设置里能切，局内想换个地形得退出去；3D 视角下放进「布局」面板随时切 */}
+                    {uiConfig.gameViewMode === '3d' && (
+                        <div className="mb-3">
+                            <div className="mb-1.5 text-xs font-bold" style={{ color: colors.muted }}>3D 场景</div>
+                            <div className="grid gap-1.5" style={{ gridTemplateColumns: SCENE_IDS.length > 4 ? 'repeat(2, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))' }}>
+                                {SCENE_IDS.map(id => {
+                                    const preset = SCENES[id];
+                                    const active = resolveSceneId(uiConfig.sceneId) === id;
+                                    return (
+                                        <button
+                                            key={id}
+                                            onClick={() => updateScene(id)}
+                                            className="min-w-0 px-2 py-2 text-center text-xs font-bold leading-tight"
+                                            style={{
+                                                background: active ? `${colors.accent1}22` : 'transparent',
+                                                color: active ? colors.accent1 : colors.fg,
+                                                border: `1px solid ${active ? colors.accent1 : colors.border}`,
+                                                borderRadius: theme.borderRadius === 'sharp' ? 0 : 8,
+                                            }}
+                                        >
+                                            <div>{preset.label}</div>
+                                            <div className="text-[11px]" style={{ color: colors.muted }}>{preset.desc}</div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <div className="mt-1.5 text-[11px] leading-tight" style={{ color: colors.muted }}>只作用于 3D 视角，点击立即换场景。</div>
+                        </div>
+                    )}
+
+                    {/* 游戏布局只作用于经典 2D 视图；3D 的地形/天空由「3D 场景」切换，3D 下隐藏 */}
                     {uiConfig.gameViewMode !== '3d' && (
                         <div className="mb-3">
-                            <div className="mb-1.5 text-[10px] font-bold" style={{ color: colors.muted }}>游戏布局</div>
+                            <div className="mb-1.5 text-xs font-bold" style={{ color: colors.muted }}>游戏布局</div>
                             <div className="grid gap-1.5" style={{ gridTemplateColumns: layoutGridCols }}>
                                 {theme.gameLayouts.map(item => {
                                     const active = uiConfig.gameLayout === item.id;
@@ -168,7 +219,7 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
                                         <button
                                             key={item.id}
                                             onClick={() => updateLayout(item.id)}
-                                            className="min-w-0 px-2 py-2 text-[10px] font-bold leading-tight"
+                                            className="min-w-0 px-2 py-2 text-xs font-bold leading-tight"
                                             style={{
                                                 background: active ? `${colors.accent1}22` : 'transparent',
                                                 color: active ? colors.accent1 : colors.fg,
@@ -187,7 +238,7 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
                     {/* 玩家卡片两种视图共用：名签/徽章/热栏在 3D 冒险队伍中同样生效 */}
                     {hasMultipleCardStyles && (
                         <div>
-                            <div className="mb-1.5 text-[10px] font-bold" style={{ color: colors.muted }}>玩家卡片</div>
+                            <div className="mb-1.5 text-xs font-bold" style={{ color: colors.muted }}>玩家卡片</div>
                             <div className="grid gap-1.5" style={{ gridTemplateColumns: cardGridCols }}>
                                 {theme.cardStyles.map(item => {
                                     const active = uiConfig.playerCardStyle === item.id;
@@ -195,7 +246,7 @@ const InGameStyleSwitcher: React.FC<Props> = ({ placement = 'bottom' }) => {
                                         <button
                                             key={item.id}
                                             onClick={() => updateCard(item.id)}
-                                            className="min-w-0 px-2 py-2 text-[10px] font-bold leading-tight"
+                                            className="min-w-0 px-2 py-2 text-xs font-bold leading-tight"
                                             style={{
                                                 background: active ? `${colors.accent1}22` : 'transparent',
                                                 color: active ? colors.accent1 : colors.fg,

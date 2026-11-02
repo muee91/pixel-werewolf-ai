@@ -2,7 +2,7 @@
 // 在 GameRoomView 挂载一次,2D/3D 共用。
 import { useEffect, useRef } from 'react';
 import { useAtomValue } from 'jotai';
-import { gamePhaseAtom, isPlayingAudioAtom, uiConfigAtom } from '../atoms';
+import { gamePhaseAtom, uiConfigAtom } from '../atoms';
 import { GamePhase } from '../types';
 import { gameSfx } from '../services/sfx';
 
@@ -33,7 +33,6 @@ const PHASE_SFX: Partial<Record<GamePhase, Parameters<typeof gameSfx.play>[0]>> 
 export const useGameSfx = (): void => {
     const phase = useAtomValue(gamePhaseAtom);
     const uiConfig = useAtomValue(uiConfigAtom);
-    const ttsPlaying = useAtomValue(isPlayingAudioAtom);
     const prevPhaseRef = useRef<GamePhase | null>(null);
 
     useEffect(() => {

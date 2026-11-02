@@ -7,12 +7,14 @@ import StateHydrator from './components/StateHydrator';
 import { initPixelCursor } from './utils/pixelCursor';
 import DebugLogOverlay from './components/DebugLogOverlay';
 import ToastContainer from './components/Toast';
+import ConfirmDialogHost from './components/ConfirmDialogHost';
 
 const HomeView = lazy(() => import('./components/HomeView'));
 const GameRoomView = lazy(() => import('./components/GameRoomView'));
 const SettingsView = lazy(() => import('./components/settings/SettingsView'));
 const AgentView = lazy(() => import('./components/AgentView'));
 const HistoryView = lazy(() => import('./components/HistoryView'));
+const ReviewView = lazy(() => import('./components/ReviewView'));
 const RulesView = lazy(() => import('./components/RulesView'));
 const MultiplayerView = lazy(() =>
     import('./multiplayer/MultiplayerView').then((module) => ({ default: module.MultiplayerView }))
@@ -39,6 +41,8 @@ const App = () => {
                 return <AgentView />;
             case 'HISTORY':
                 return <HistoryView />;
+            case 'REVIEW':
+                return <ReviewView />;
             case 'RULES':
                 return <RulesView />;
             case 'MULTIPLAYER':
@@ -69,6 +73,7 @@ className="relative highlight-white/5 transition-all duration-500 w-full h-full 
 
             <DebugLogOverlay />
             <ToastContainer />
+            <ConfirmDialogHost />
         </React.Fragment>
         </ThemeProvider>
     );

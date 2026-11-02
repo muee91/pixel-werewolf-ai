@@ -1,27 +1,94 @@
 import React, { useMemo, useCallback, useRef, useLayoutEffect, useState, useEffect, type RefObject } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import {
   buildSeatPlacements,
   buildVisibleAvatarDescriptor,
+  getSeatRadius,
   getWorldTerrain,
   type WorldTerrain,
   type VisiblePlayer,
 } from './sceneModel';
 import { VoxelCharacter } from './VoxelCharacter';
+import { preloadKayKitModels } from './KayKitActor';
 import { WorldEffects } from './WorldEffects';
 import { SceneDirector } from './SceneDirector';
 import { SkillEffects } from './SkillEffects';
 import type { CameraStyle } from './cameraDirectorModel';
 import { sharedMat, blockMat } from './materials';
 import type { SkillEffectEvent } from './skillEffectModel';
+import { DEFAULT_SCENE_ID, SCENES, type ScenePreset } from './biomes';
+import type { CameraBlocker } from './cameraClearance';
+import { KayKitPropGroup, preloadKayKitProps, type KayKitPropSpec } from './KayKitProps';
+import { createFireTexture, drawFireFrame, getGlowTexture, FIRE_TEX_SIZE } from './fireTextures';
+import { CryptHall } from './CryptHall';
+import { CRYPT_BLOCKERS, cryptHeightAt } from './cryptHallModel';
+
+// ── 营地固定道具坐标 ─────────────────────────────────────
+// 一份数据两处用：这里渲模型，同时换算成相机避让的柱体（cameraClearance.ts）。
+// 全部道具都在 12.5m 开外 —— 默认巡游机位在 11.5m，永远站在道具圈**里侧**，
+// 不会出现"镜头前杵着半座瞭望塔"。原先小木屋在 (5,-5)、离营火才 7m，正好卡在
+// 机位和营火之间，是玩家截图里那块黑色挡板的主要来源，已挪到西北角。
+const CAMP_LAYOUT = {
+  houseA: { x: 14, z: -6 },
+  houseB: { x: -12, z: -12 },
+  tower: { x: 15, z: 11 },
+  well: { x: -8, z: 12 },
+  farm: { x: 2, z: -16 },
+  cabin: { x: -13.5, z: 5.5 },
+  pond: { x: -17, z: 10 },
+  lanterns: [[-8, 5], [8.5, 5.5], [6, -10.5], [-6, -10]] as [number, number][],
+};
+
+/** 会把视线切开的道具（俯视外接圆 + 顶端高度），供镜头避让用 */
+const CAMP_BLOCKERS: CameraBlocker[] = [
+  { x: CAMP_LAYOUT.houseA.x, z: CAMP_LAYOUT.houseA.z, radius: 2.6, height: 3.4 },
+  { x: CAMP_LAYOUT.houseB.x, z: CAMP_LAYOUT.houseB.z, radius: 2.1, height: 3.0 },
+  { x: CAMP_LAYOUT.tower.x, z: CAMP_LAYOUT.tower.z, radius: 1.4, height: 6.2 },
+  { x: CAMP_LAYOUT.well.x, z: CAMP_LAYOUT.well.z, radius: 0.9, height: 1.7 },
+  { x: CAMP_LAYOUT.cabin.x, z: CAMP_LAYOUT.cabin.z, radius: 1.5, height: 2.3 },
+  ...CAMP_LAYOUT.lanterns.map(([x, z]) => ({ x, z, radius: 0.45, height: 2.6 })),
+];
+
+// 营地小道具（CC0）：摆在座位圈外、巡游机位里侧（r≈6~9），
+// 这样全景镜头里看得见，又不至于挡住营火；再往外就永远在镜头背后了。
+const CAMP_PROP_SPECS: KayKitPropSpec[] = [
+  { name: 'barrel_large', x: 7.4, z: -3.6, height: 1.15, rotationY: 0.35 },
+  { name: 'crates_stacked', x: 8.3, z: 2.2, height: 1.35, rotationY: -0.22 },
+  { name: 'keg', x: -6.6, z: -4.4, height: 1.0, rotationY: 0.5 },
+  { name: 'table_small', x: -7.4, z: 3.0, height: 0.78, rotationY: 0.25 },
+  { name: 'stool', x: -6.2, z: 3.9, height: 0.55, rotationY: 1.1 },
+  { name: 'barrel_small_stack', x: -3.4, z: 6.8, height: 1.2, rotationY: 0.8 },
+  { name: 'chest', x: 5.6, z: 5.6, height: 0.8, rotationY: -0.6 },
+  { name: 'trunk_medium_A', x: 3.4, z: 5.4, height: 0.72, rotationY: 0.4 },
+];
+
+// 圣殿里"有人在这儿待过"的痕迹：补给全堆在祭坛背后（-x / -z 一侧）。
+// 三个约束：① 避开四角火盆（r=7.1，0°/90°/180°/270°）；
+// ② 避开柱脚（r=12.2，22.5°+45°k）→ 落点半径压到 10.5~10.8；
+// ③ 不能进全景机位（46.8°、11m 外）的正前方 —— 否则一进场景就是一口木箱怼在镜头上。
+const CRYPT_PROP_SPECS: KayKitPropSpec[] = [
+  { name: 'barrel_large', x: -9.2, z: -5.6, height: 1.15, rotationY: 0.4 },
+  { name: 'chest', x: -10.3, z: -2.6, height: 0.8, rotationY: -0.5 },
+  { name: 'crates_stacked', x: -9.6, z: -4.4, height: 1.35, rotationY: 0.3 },
+  { name: 'keg', x: -10.3, z: -3.1, height: 1.0, rotationY: 0.6 },
+  { name: 'barrel_small_stack', x: -4.4, z: -9.5, height: 1.2, rotationY: -0.3 },
+  { name: 'trunk_medium_A', x: -3.2, z: -10.2, height: 0.72, rotationY: 0.8 },
+];
 
 // ── Shared geometry/material pools ───────────────────────
 
 const boxGeo = new THREE.BoxGeometry(1, 1, 1);
 
 // 配色由方块贴图（textures.ts + materials.ts）提供，这里不再维护色板常量。
+
+// 减少动态偏好：模块级读取一次；减弱时循环动效定格在可见状态（火仍在、只是不闪），
+// Node 测试环境无 matchMedia 时安全回退为 false
+const prefersReducedMotion =
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        : false;
 
 interface ForestCampSceneProps {
   players: VisiblePlayer[];
@@ -38,101 +105,76 @@ interface ForestCampSceneProps {
   snapDialogueCamera?: boolean;
   /** 运镜方式 */
   cameraStyle?: CameraStyle;
+  /** 场景预设（群系）：决定地表方块/树种/水色/天空与雾 */
+  scene?: ScenePreset;
 }
 
 // ── Campfire（火星上升 + 烟雾 + 多层火苗摆动） ────────────
 
-// ── MC 原版火焰:交叉双面片 + 程序化逐帧火焰纹理 ──────────
-// 原版算法:16×16 纹理,每列火舌高度随机游走 + 邻列平滑,
-// 火苗底部白黄、中段橙、尖端红且透明渐隐;以 ~11fps 逐帧重绘。
-
-let fireCanvas: HTMLCanvasElement | null = null;
-// Node 环境(单测导入)不触 DOM,首次绘制时才创建
-const getFireCanvas = (): HTMLCanvasElement => {
-    if (!fireCanvas) {
-        fireCanvas = document.createElement('canvas');
-        fireCanvas.width = 16;
-        fireCanvas.height = 16;
-    }
-    return fireCanvas;
-};
-
-const drawFireFrame = (heights: Float32Array) => {
-    const ctx = getFireCanvas().getContext('2d')!;
-    ctx.clearRect(0, 0, 16, 16);
-    for (let x = 0; x < 16; x++) {
-        const h = Math.round(heights[x]);
-        for (let y = 0; y < h; y++) {
-            const frac = (h - y) / h;            // 0=尖端 1=根部
-            ctx.fillStyle = frac > 0.8 ? '#fff3b0'
-                : frac > 0.5 ? '#ffd45a'
-                : frac > 0.25 ? '#f6923a'
-                : '#e0401a';
-            ctx.globalAlpha = frac > 0.92 ? 0.5 : Math.min(1, 0.35 + frac * 0.75);
-            ctx.fillRect(x, 15 - y, 1, 1);
-        }
-    }
-    ctx.globalAlpha = 1;
-};
+// 营火火焰的贴图（画布/渐变）已抽到 fireTextures.ts —— 石殿祭坛要用同一套火。
+// 这里只留"营火怎么摆"：木柴环 + 交叉双面片 + 光晕 + 火星 + 烟。
 
 const Campfire: React.FC = () => {
-  const flameTex = useMemo(() => {
-      const tex = new THREE.CanvasTexture(fireCanvas);
-      tex.magFilter = THREE.NearestFilter;
-      tex.minFilter = THREE.NearestFilter;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      return tex;
-  }, []);
+  const flameTex = useMemo(() => createFireTexture(), []);
   const accRef = useRef(0);
-  const heightsRef = useRef(new Float32Array(16));
-  const sparksRef = useRef<THREE.InstancedMesh>(null);
+  const staticDrawnRef = useRef(false);
+  const heightsRef = useRef(new Float32Array(FIRE_TEX_SIZE));
+  const sparksRef = useRef<THREE.Points>(null);
+  const sparkPositions = useMemo(() => new Float32Array(14 * 3), []);
   const embersRef = useRef<THREE.InstancedMesh>(null);
-  const smokeRefs = useRef<(THREE.Mesh | null)[]>([]);
+  const smokeRefs = useRef<(THREE.Sprite | null)[]>([]);
+  const glowRef = useRef<THREE.Sprite | null>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
 
-  useFrame(({ camera, clock }, delta) => {
+  useFrame(({ clock }, delta) => {
       // 朝向相机交叉成 X 形(MC 火焰块的双面片布局)
-      const yaw = Math.atan2(camera.position.x, camera.position.z);
-      accRef.current += delta;
-      // ~11fps 重绘火焰纹理,与原版节奏一致
-      if (accRef.current >= 0.09) {
-          accRef.current = 0;
+      // 减弱动态时冻结时间轴：下方循环动效全部取定格 t，火/火星/烟仍渲染但不再动
+      const t = prefersReducedMotion ? 0 : clock.elapsedTime;
+      const drawFlame = () => {
           const heights = heightsRef.current;
-          const frame = Math.floor(performance.now() / 90);
-          for (let x = 0; x < 16; x++) {
+          const frame = prefersReducedMotion ? 0 : Math.floor(performance.now() / 90);
+          for (let x = 0; x < FIRE_TEX_SIZE; x++) {
               const wave = 5 + 4 * Math.abs(Math.sin(x * 0.8 + Math.floor(frame / 3) * 1.7));
               const jitter = Math.random() * 3.2;
-              heights[x] = Math.max(1, Math.min(16, wave + jitter));
+              heights[x] = Math.max(1, Math.min(FIRE_TEX_SIZE, wave + jitter));
           }
-          for (let x = 1; x < 15; x++) {
+          for (let x = 1; x < FIRE_TEX_SIZE - 1; x++) {
               heights[x] = (heights[x - 1] + heights[x] * 2 + heights[x + 1]) / 4;
           }
           drawFireFrame(heights);
           flameTex.needsUpdate = true;
+      };
+      if (prefersReducedMotion) {
+          // 只画一帧静态火苗,之后不再重绘
+          if (!staticDrawnRef.current) {
+              staticDrawnRef.current = true;
+              drawFlame();
+          }
+      } else {
+          accRef.current += delta;
+          // ~11fps 重绘火焰纹理
+          if (accRef.current >= 0.09) {
+              accRef.current = 0;
+              drawFlame();
+          }
       }
-      // 火星:循环上升、逐渐缩小（用缩放代替透明度，保持共享材质）
+      // 火星:循环上升的点精灵（原来是发光小方块，在夜里看着像一张张小纸片贴在空中的）
       if (sparksRef.current) {
         for (let i = 0; i < 14; i++) {
           const phase = (i * 0.618) % 1;
-          const life = (clock.elapsedTime * 0.4 + phase) % 1;
-          dummy.position.set(
-            Math.sin(clock.elapsedTime * 2 + i * 2.1) * 0.14 + Math.sin(i * 5.3) * 0.18,
-            0.6 + life * 2.6,
-            Math.cos(clock.elapsedTime * 1.7 + i * 1.3) * 0.14 + Math.cos(i * 3.7) * 0.18,
-          );
-          const s = Math.max(0.02, 0.085 * (1 - life));
-          dummy.scale.set(s, s * 1.7, s);
-          dummy.rotation.set(0, clock.elapsedTime + i, 0);
-          dummy.updateMatrix();
-          sparksRef.current.setMatrixAt(i, dummy.matrix);
+          const life = (t * 0.4 + phase) % 1;
+          sparkPositions[i * 3] = Math.sin(t * 2 + i * 2.1) * 0.14 + Math.sin(i * 5.3) * 0.18;
+          sparkPositions[i * 3 + 1] = 0.6 + life * 2.2;
+          sparkPositions[i * 3 + 2] = Math.cos(t * 1.7 + i * 1.3) * 0.14 + Math.cos(i * 3.7) * 0.18;
         }
-        sparksRef.current.instanceMatrix.needsUpdate = true;
+        const attr = sparksRef.current.geometry.getAttribute('position') as THREE.BufferAttribute;
+        attr.needsUpdate = true;
       }
       // 余烬床:贴地红热点随机明灭
       if (embersRef.current) {
         for (let i = 0; i < 8; i++) {
           const a = (i / 8) * Math.PI * 2 + 0.3;
-          const glow = 0.5 + 0.5 * Math.sin(clock.elapsedTime * (2.2 + i * 0.7) + i * 1.9);
+          const glow = 0.5 + 0.5 * Math.sin(t * (2.2 + i * 0.7) + i * 1.9);
           dummy.position.set(Math.cos(a) * 0.55, 0.06, Math.sin(a) * 0.55);
           const s = 0.05 + glow * 0.04;
           dummy.scale.set(s, s * 0.5, s);
@@ -145,12 +187,19 @@ const Campfire: React.FC = () => {
       smokeRefs.current.forEach((mesh, i) => {
         if (!mesh) return;
         const phase = (i * 0.37) % 1;
-        const life = (clock.elapsedTime * 0.16 + phase) % 1;
+        const life = (t * 0.16 + phase) % 1;
         mesh.position.y = 1.9 + life * 3.6;
-        mesh.position.x = Math.sin(clock.elapsedTime * 0.6 + i * 2.4) * 0.34 * life;
+        mesh.position.x = Math.sin(t * 0.6 + i * 2.4) * 0.34 * life;
         mesh.scale.setScalar(0.2 + life * 0.9);
-        mesh.rotation.y = clock.elapsedTime * 0.4 + i;
+        mesh.rotation.y = t * 0.4 + i;
       });
+      // 光晕跟着火苗一起呼吸（减弱动态时定在不闪的中值）
+      if (glowRef.current) {
+        const breath = prefersReducedMotion ? 0.5 : 0.5 + Math.sin(t * 6.3) * 0.12 + Math.sin(t * 13.1) * 0.05;
+        glowRef.current.material.opacity = 0.24 + breath * 0.14;
+        const s = 3.8 + breath * 0.4;
+        glowRef.current.scale.set(s, s, 1);
+      }
   });
 
   return <group position={[0, 0, 0]}>
@@ -181,17 +230,53 @@ const Campfire: React.FC = () => {
         <planeGeometry args={[1.5, 1.7]} />
         <meshBasicMaterial map={flameTex} transparent depthWrite={false} side={THREE.DoubleSide} toneMapped={false} />
     </mesh>
-    {/* 火星 */}
-    <instancedMesh ref={sparksRef} args={[boxGeo, sharedMat('#ffd27a', { emissive: '#ffb84d', emissiveIntensity: 3 }), 14]} frustumCulled={false} />
-    {/* 烟 */}
+    {/* 火光光晕：始终朝向相机，远处也能看出这儿有堆火 */}
+    <sprite ref={glowRef} position={[0, 1.05, 0]} scale={[3.8, 3.8, 1]} renderOrder={3}>
+      <spriteMaterial
+        map={getGlowTexture()}
+        transparent
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        toneMapped={false}
+        opacity={0.4}
+      />
+    </sprite>
+    {/* 火星：点精灵 + 发光贴图，烧成一粒粒暖色光点 */}
+    <points ref={sparksRef} frustumCulled={false}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[sparkPositions, 3]} />
+      </bufferGeometry>
+      <pointsMaterial
+        map={getGlowTexture()}
+        color="#ffb45a"
+        size={0.36}
+        sizeAttenuation
+        transparent
+        opacity={0.85}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        toneMapped={false}
+      />
+    </points>
+    {/* 烟：六张朝向相机的软面片。
+        原来是不透明度 0.16 的方块，夜里就成了一串飘在空中的白方块（玩家眼里的"UFO"）；
+        换成径向渐变面片 + 普通混合，才是烟该有的样子。 */}
     {Array.from({ length: 6 }, (_, i) => (
-      <mesh
+      <sprite
         key={`smoke-${i}`}
         ref={(el) => { smokeRefs.current[i] = el; }}
-        geometry={boxGeo}
         position={[0, 2, 0]}
-        material={sharedMat('#9aa2a8', { roughness: 1, transparent: true, opacity: 0.16 })}
-      />
+        scale={[0.6, 0.6, 1]}
+      >
+        <spriteMaterial
+          map={getGlowTexture()}
+          color="#8d959c"
+          transparent
+          opacity={0.22}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </sprite>
     ))}
   </group>;
 };
@@ -202,6 +287,12 @@ const Torch: React.FC<{ position: [number, number, number] }> = ({ position }) =
   const headRef = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     if (!headRef.current) return;
+    if (prefersReducedMotion) {
+      // 减弱动态:火把定格在静止姿态(火光仍在,只是不摆)
+      headRef.current.scale.y = 0.2;
+      headRef.current.position.x = 0;
+      return;
+    }
     const t = clock.elapsedTime;
     headRef.current.scale.y = 0.2 + Math.sin(t * 8.5 + position[0]) * 0.045;
     headRef.current.position.x = Math.sin(t * 5.1 + position[2]) * 0.015;
@@ -261,7 +352,11 @@ const Cabin: React.FC<{ position: [number, number, number] }> = ({ position }) =
 
 // ── 方块世界（InstancedMesh 渲染，数千方块仅数次 draw call） ──
 
-const BlockyWorld: React.FC<{ terrain: WorldTerrain; focusPoints: { x: number; y: number; z: number }[] }> = ({ terrain, focusPoints }) => {
+const BlockyWorld: React.FC<{
+  terrain: WorldTerrain;
+  focusPoints: { x: number; y: number; z: number }[];
+  scene: ScenePreset;
+}> = ({ terrain, focusPoints, scene }) => {
   const grassRef = useRef<THREE.InstancedMesh>(null);
   const dirtRef = useRef<THREE.InstancedMesh>(null);
   const waterRef = useRef<THREE.InstancedMesh>(null);
@@ -272,6 +367,29 @@ const BlockyWorld: React.FC<{ terrain: WorldTerrain; focusPoints: { x: number; y
   const birchRef = useRef<THREE.InstancedMesh>(null);
 
   const scales = useRef<number[]>([]);
+  const waterAcc = useRef(0);
+  const waterDummy = useMemo(() => new THREE.Object3D(), []);
+
+  // 水面不再是一块死贴图：逐块上下浮动一点点（±5cm、错相位），夜里再靠自发光留一点月光反照。
+  // 逐帧写上千个矩阵太贵，压到约 16fps 更新，肉眼看不出台阶。
+  useFrame(({ clock }, delta) => {
+    const mesh = waterRef.current;
+    if (!mesh) return;
+    waterAcc.current += delta;
+    if (waterAcc.current < 0.06) return;
+    waterAcc.current = 0;
+    const t = prefersReducedMotion ? 0 : clock.elapsedTime;
+    const list = terrain.water;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      waterDummy.position.set(b.x, b.y + Math.sin(t * 1.5 + b.x * 0.6 + b.z * 0.45) * 0.05, b.z);
+      waterDummy.rotation.set(0, 0, 0);
+      waterDummy.scale.set(1, 1, 1);
+      waterDummy.updateMatrix();
+      mesh.setMatrixAt(i, waterDummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  });
 
   useLayoutEffect(() => {
     const dummy = new THREE.Object3D();
@@ -279,15 +397,16 @@ const BlockyWorld: React.FC<{ terrain: WorldTerrain; focusPoints: { x: number; y
       ref: { current: THREE.InstancedMesh | null },
       list: { x: number; y: number; z: number }[],
     ) => {
-      if (!ref.current) return;
+      const mesh = ref.current;
+      if (!mesh) return;
       list.forEach((b, i) => {
         dummy.position.set(b.x, b.y, b.z);
         dummy.rotation.set(0, 0, 0);
         dummy.scale.set(1, 1, 1);
         dummy.updateMatrix();
-        ref.current.setMatrixAt(i, dummy.matrix);
+        mesh.setMatrixAt(i, dummy.matrix);
       });
-      ref.current.instanceMatrix.needsUpdate = true;
+      mesh.instanceMatrix.needsUpdate = true;
     };
     fill(grassRef, terrain.grass);
     fill(dirtRef, terrain.dirt);
@@ -302,7 +421,7 @@ const BlockyWorld: React.FC<{ terrain: WorldTerrain; focusPoints: { x: number; y
 
   // 树木遮挡沉降:树心挡在"相机→关注点(营地/任一座位)"连线上时整树缩没,转开后长回。
   // 只沉真正挡人的树,远景树不受影响;触碰过的树恢复到精确 1 才停,杜绝悬空树冠。
-  useFrame(({ camera, clock }, delta) => {
+  useFrame(({ camera }, delta) => {
     const trees = terrain.trees;
     if (!trees.length) return;
     if (scales.current.length !== trees.length) scales.current = new Array(trees.length).fill(1);
@@ -366,14 +485,16 @@ const BlockyWorld: React.FC<{ terrain: WorldTerrain; focusPoints: { x: number; y
 
   return (
     <>
-      <instancedMesh ref={grassRef} args={[boxGeo, blockMat('grass', 1, 1), Math.max(1, terrain.grass.length)]} receiveShadow frustumCulled={false} />
-      <instancedMesh ref={dirtRef} args={[boxGeo, blockMat('dirt', 1, 1), Math.max(1, terrain.dirt.length)]} receiveShadow frustumCulled={false} />
-      <instancedMesh ref={waterRef} args={[boxGeo, sharedMat('#3d86ad', { transparent: true, opacity: 0.75, roughness: 0.3 }), Math.max(1, terrain.water.length)]} frustumCulled={false} />
-      <instancedMesh ref={sandRef} args={[boxGeo, blockMat('sand', 1, 1), Math.max(1, terrain.sand.length)]} receiveShadow frustumCulled={false} />
-      <instancedMesh ref={stoneRef} args={[boxGeo, blockMat('stone', 1, 1), Math.max(1, terrain.stone.length)]} receiveShadow frustumCulled={false} />
-      <instancedMesh ref={logRef} args={[boxGeo, blockMat('log', 1, 1), Math.max(1, terrain.log.length)]} castShadow frustumCulled={false} />
-      <instancedMesh ref={birchRef} args={[boxGeo, blockMat('birch', 1, 1), Math.max(1, terrain.birchLog.length)]} castShadow frustumCulled={false} />
-      <instancedMesh ref={leavesRef} args={[boxGeo, blockMat('leaves', 1, 1), Math.max(1, terrain.leaves.length)]} castShadow frustumCulled={false} />
+      <instancedMesh ref={grassRef} args={[boxGeo, blockMat(scene.ground, 1, 1), Math.max(1, terrain.grass.length)]} receiveShadow frustumCulled={false} />
+      <instancedMesh ref={dirtRef} args={[boxGeo, blockMat(scene.sub, 1, 1), Math.max(1, terrain.dirt.length)]} receiveShadow frustumCulled={false} />
+      <instancedMesh ref={waterRef} args={[boxGeo, scene.water
+        ? sharedMat(scene.water.color, { transparent: true, opacity: scene.water.opacity, roughness: 0.18, emissive: scene.water.emissive, emissiveIntensity: 0.55 })
+        : sharedMat('#000000', { transparent: true, opacity: 0 }), Math.max(1, terrain.water.length)]} frustumCulled={false} />
+      <instancedMesh ref={sandRef} args={[boxGeo, blockMat(scene.shore, 1, 1), Math.max(1, terrain.sand.length)]} receiveShadow frustumCulled={false} />
+      <instancedMesh ref={stoneRef} args={[boxGeo, blockMat(scene.stone, 1, 1), Math.max(1, terrain.stone.length)]} receiveShadow frustumCulled={false} />
+      <instancedMesh ref={logRef} args={[boxGeo, blockMat(scene.log, 1, 1), Math.max(1, terrain.log.length)]} castShadow frustumCulled={false} />
+      <instancedMesh ref={birchRef} args={[boxGeo, blockMat(scene.birch, 1, 1), Math.max(1, terrain.birchLog.length)]} castShadow frustumCulled={false} />
+      <instancedMesh ref={leavesRef} args={[boxGeo, blockMat(scene.leaves ?? 'leaves', 1, 1), Math.max(1, terrain.leaves.length)]} castShadow frustumCulled={false} />
       {terrain.rocks.map((r, i) => (
         <mesh
           key={`rock-${i}`}
@@ -468,6 +589,24 @@ const Pond: React.FC<{ position: [number, number, number] }> = ({ position }) =>
 
 // ── Main scene ───────────────────────────────────────────
 
+// 每帧把 renderer.info 发布到 window，供 canvas 检查器读取真实渲染预算
+// （calls/triangles/geometries/textures）。useFrame 跑在 gl.render 之前，
+// three 的 info.reset() 在 render() 开头执行，因此这里读到的是上一帧完整计数。
+// 字段写入稳定对象，避免逐帧分配。
+const RenderDiagnostics: React.FC = () => {
+  const gl = useThree(state => state.gl);
+  useFrame(() => {
+    const info = gl.info;
+    const diagnostics = (window.__THREE_GAME_DIAGNOSTICS__ ??= {});
+    const renderer = (diagnostics.renderer ??= {});
+    renderer.calls = info.render.calls;
+    renderer.triangles = info.render.triangles;
+    renderer.geometries = info.memory.geometries;
+    renderer.textures = info.memory.textures;
+  });
+  return null;
+};
+
 export const ForestCampScene: React.FC<ForestCampSceneProps> = ({
   players,
   currentSpeakerId,
@@ -482,9 +621,16 @@ export const ForestCampScene: React.FC<ForestCampSceneProps> = ({
   dialogueConcealed = false,
   snapDialogueCamera = false,
   cameraStyle = 'auto',
+  scene = SCENES[DEFAULT_SCENE_ID],
 }) => {
   const seatPlacements = useMemo(() => buildSeatPlacements(players), [players]);
-  const terrain = useMemo(() => getWorldTerrain(), []);
+  /** 圣殿：另一整套世界构造，不生成方块地形、不用营火/木屋/火把 */
+  const isCrypt = scene.style === 'crypt';
+  const terrain = useMemo(() => getWorldTerrain(20260911, scene), [scene]);
+  // 进场景就把五只角色模型排队下下来（本地静态文件，1.7 MB），
+  // 免得切座位时先看到体素兜底再"跳"成模型
+  useMemo(() => preloadKayKitModels(), []);
+  useMemo(() => preloadKayKitProps(), []);
 
   const focusPoints = useMemo(() => [
     { x: 0, y: 1, z: 0 },
@@ -549,6 +695,9 @@ export const ForestCampScene: React.FC<ForestCampSceneProps> = ({
 
   return (
     <>
+      {/* 渲染预算诊断（canvas 检查器读取） */}
+      <RenderDiagnostics />
+
       {/* Camera director */}
       <SceneDirector
         focusSeatX={focusX}
@@ -559,45 +708,78 @@ export const ForestCampScene: React.FC<ForestCampSceneProps> = ({
         dialogueMode={dialogueMode}
         snapDialogueCamera={snapDialogueCamera}
         cameraStyle={cameraStyle}
+        indoor={scene.indoor}
+        blockers={isCrypt ? CRYPT_BLOCKERS : CAMP_BLOCKERS}
+        seatRadius={getSeatRadius(players.length)}
+        seatCount={players.length}
       />
 
       {/* Lighting, fog, particles */}
-      <WorldEffects isNight={isNight} effectLevel={effectLevel} />
+      <WorldEffects isNight={isNight} effectLevel={effectLevel} scene={scene} />
 
-      {/* The world remains present during dialogue shots: characters speak in a
-          blocky forest, not against an empty stage.  Only foreground
-          players and active effects are isolated below. */}
-      <BlockyWorld terrain={terrain} focusPoints={focusPoints} />
-      {<GrassTufts heightAt={terrain.heightAt} />}
-      {(
+      {/* 世界本体：两套完全不同的构造。
+          深渊圣殿用 CryptHall 现搭曲线几何（柱廊/尖拱窗/穹顶/铁火盆），
+          其余群系仍是程序化方块地形 + 木构营地。 */}
+      {isCrypt ? (
+        <CryptHall />
+      ) : (
         <>
-          <HouseMC position={[13, terrain.heightAt(13, -5), -5]} rotationY={-0.25} />
-          <HouseMC position={[-12, terrain.heightAt(-12, -12), -12]} rotationY={0.5} w={4} d={3} h={1.8} />
-          <WatchTower position={[15, terrain.heightAt(15, 11), 11]} />
-          <Well position={[-8, terrain.heightAt(-8, 12), 12]} />
-          <FarmPlot position={[2, terrain.heightAt(2, -16), -16]} />
-          <LanternPost position={[-8, terrain.heightAt(-8, 5), 5]} />
-          <LanternPost position={[8.5, terrain.heightAt(8.5, 5.5), 5.5]} />
-          <LanternPost position={[6, terrain.heightAt(6, -10.5), -10.5]} />
-          <LanternPost position={[-6, terrain.heightAt(-6, -10), -10]} />
-          <Pond position={[-17, terrain.heightAt(-17, 10), 10]} />
+          {/* The world remains present during dialogue shots: characters speak in a
+              blocky forest, not against an empty stage.  Only foreground
+              players and active effects are isolated below. */}
+          <BlockyWorld key={scene.id} terrain={terrain} focusPoints={focusPoints} scene={scene} />
+          {/* 草丛与野花只属于有草的场景：雪原/荒漠里长绿草会非常跳戏 */}
+          {(scene.id === 'forest-camp' || scene.id === 'autumn-camp') && <GrassTufts heightAt={terrain.heightAt} />}
+          {!scene.indoor && (
+            <>
+              <HouseMC position={[CAMP_LAYOUT.houseA.x, terrain.heightAt(CAMP_LAYOUT.houseA.x, CAMP_LAYOUT.houseA.z), CAMP_LAYOUT.houseA.z]} rotationY={-0.25} />
+              <HouseMC position={[CAMP_LAYOUT.houseB.x, terrain.heightAt(CAMP_LAYOUT.houseB.x, CAMP_LAYOUT.houseB.z), CAMP_LAYOUT.houseB.z]} rotationY={0.5} w={4} d={3} h={1.8} />
+              <WatchTower position={[CAMP_LAYOUT.tower.x, terrain.heightAt(CAMP_LAYOUT.tower.x, CAMP_LAYOUT.tower.z), CAMP_LAYOUT.tower.z]} />
+              <Well position={[CAMP_LAYOUT.well.x, terrain.heightAt(CAMP_LAYOUT.well.x, CAMP_LAYOUT.well.z), CAMP_LAYOUT.well.z]} />
+              {scene.id !== 'desert-ruins' && <FarmPlot position={[CAMP_LAYOUT.farm.x, terrain.heightAt(CAMP_LAYOUT.farm.x, CAMP_LAYOUT.farm.z), CAMP_LAYOUT.farm.z]} />}
+              <LanternPost position={[CAMP_LAYOUT.lanterns[0][0], terrain.heightAt(CAMP_LAYOUT.lanterns[0][0], CAMP_LAYOUT.lanterns[0][1]), CAMP_LAYOUT.lanterns[0][1]]} />
+              <LanternPost position={[CAMP_LAYOUT.lanterns[1][0], terrain.heightAt(CAMP_LAYOUT.lanterns[1][0], CAMP_LAYOUT.lanterns[1][1]), CAMP_LAYOUT.lanterns[1][1]]} />
+              <LanternPost position={[CAMP_LAYOUT.lanterns[2][0], terrain.heightAt(CAMP_LAYOUT.lanterns[2][0], CAMP_LAYOUT.lanterns[2][1]), CAMP_LAYOUT.lanterns[2][1]]} />
+              <LanternPost position={[CAMP_LAYOUT.lanterns[3][0], terrain.heightAt(CAMP_LAYOUT.lanterns[3][0], CAMP_LAYOUT.lanterns[3][1]), CAMP_LAYOUT.lanterns[3][1]]} />
+              {scene.water && <Pond position={[CAMP_LAYOUT.pond.x, terrain.heightAt(CAMP_LAYOUT.pond.x, CAMP_LAYOUT.pond.z), CAMP_LAYOUT.pond.z]} />}
+            </>
+          )}
+
+          {/* Campfire at centre */}
+          <Campfire />
+
+          {/* 夜晚隐名:不再凭空生成"神秘发言者"NPC——发言者就在篝火圈中但不做任何标记,镜头对准营火中心 */}
+
+          {/* Torches around fire */}
+          {torchPositions.map((pos, i) => (
+            <Torch key={`torch-${i}`} position={pos} />
+          ))}
+          {/* 室内没有天光，四支火把要真的发光，否则石厅就是一间黑屋 */}
+          {scene.indoor && torchPositions.map((pos, i) => (
+            <pointLight
+              key={`torch-light-${i}`}
+              position={[pos[0], 1.3, pos[2]]}
+              color="#ffb066"
+              intensity={22}
+              distance={18}
+              decay={2}
+            />
+          ))}
+
+          {/* 小木屋：户外场景才有 */}
+          {!scene.indoor && (
+            <Cabin position={[CAMP_LAYOUT.cabin.x, terrain.heightAt(CAMP_LAYOUT.cabin.x, CAMP_LAYOUT.cabin.z), CAMP_LAYOUT.cabin.z]} />
+          )}
         </>
       )}
 
-      {/* Campfire at centre */}
-      <Campfire />
-
-      {/* 夜晚隐名:不再凭空生成"神秘发言者"NPC——发言者就在篝火圈中但不做任何标记,镜头对准营火中心 */}
-
       <SkillEffects events={skillEvents} playerPositions={playerPositions} effectLevel={effectLevel} />
 
-      {/* Torches around fire */}
-      {torchPositions.map((pos, i) => (
-        <Torch key={`torch-${i}`} position={pos} />
-      ))}
-
-      {/* Cabin */}
-      {<Cabin position={[5, 0, -5]} />}
+      {/* 生活道具（CC0 模型）：营地摆酒桶/木箱/酒桌，圣殿靠柱脚堆补给 */}
+      <KayKitPropGroup
+        specs={isCrypt ? CRYPT_PROP_SPECS : CAMP_PROP_SPECS}
+        heightAt={isCrypt ? cryptHeightAt : terrain.heightAt}
+      />
 
       {/* Player characters */}
       {seatPlacements.map((seat) => {

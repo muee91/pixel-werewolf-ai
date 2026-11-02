@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KayKit 接入验收台</title>
+    <style>
+      :root {
+        --ink: #24170e;
+        --paper: #f2dfaa;
+        --torch: #f6b443;
+        --font: ui-monospace, "SF Mono", Menlo, "PingFang SC", system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #b9cbd6;
+        color: var(--ink);
+        font-family: var(--font);
+        overflow: hidden;
+      }
+      #root { height: 100%; display: flex; flex-direction: column; }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 10px 18px;
+        background: #f2dfaa;
+        border-bottom: 3px solid var(--ink);
+        flex-wrap: wrap;
+      }
+      .title { font-size: 14px; font-weight: 800; }
+      .title small { font-size: 11px; font-weight: 500; opacity: .55; margin-left: 8px; }
+      .seg { display: flex; gap: 6px; margin-left: auto; }
+      .seg button {
+        font-family: inherit; font-size: 12px; font-weight: 700; padding: 6px 13px;
+        background: #fff8e2; border: 2px solid var(--ink); cursor: pointer;
+      }
+      .seg button[data-on="1"] { background: var(--torch); }
+      .stage { position: relative; flex: 1; min-height: 0; }
+      .lane {
+        position: absolute; bottom: 10px; left: 0; right: 0;
+        display: flex; justify-content: center; gap: 0;
+        font-size: 11px; pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/compare3d/stage.tsx"></script>
+  </body>
+</html>

@@ -87,7 +87,8 @@ test('two browser sessions can create, join, ready, start and reconnect', async 
             }]));
         }, roomServerBase);
         await page.goto('/');
-        await page.getByRole('button', { name: /联机服务器/ }).click();
+        // 首页底部导航入口文案是「联机」（旧文案「联机服务器」已改）
+        await page.getByRole('button', { name: '联机', exact: true }).click();
         await expect(page.getByText('联机大厅', { exact: true })).toBeVisible();
     }
 
@@ -111,10 +112,10 @@ test('two browser sessions can create, join, ready, start and reconnect', async 
     await expect(hostPage.getByRole('button', { name: '开始游戏' })).toBeEnabled();
     await hostPage.getByRole('button', { name: '开始游戏' }).click();
 
-    await expect(hostPage.getByRole('button', { name: /暂停世界/ })).toBeVisible();
+    await expect(hostPage.getByRole('button', { name: /暂停/ })).toBeVisible();
     await expect(guestPage.getByText('未知职业').first()).toBeVisible();
-    await hostPage.getByRole('button', { name: /暂停世界/ }).click();
-    await expect(hostPage.getByRole('button', { name: /继续世界/ })).toBeVisible();
+    await hostPage.getByRole('button', { name: /暂停/ }).click();
+    await expect(hostPage.getByRole('button', { name: /继续/ })).toBeVisible();
     await expect(guestPage.getByTestId('game-paused-banner')).toBeVisible();
 
     for (const page of [hostPage, guestPage]) {
@@ -138,10 +139,10 @@ test('two browser sessions can create, join, ready, start and reconnect', async 
     await expect(guestPage.getByText('未知职业').first()).toBeVisible({ timeout: 15_000 });
     await expect(guestPage.getByTestId('game-paused-banner')).toBeVisible();
 
-    await hostPage.getByRole('button', { name: /继续世界/ }).click();
+    await hostPage.getByRole('button', { name: /继续/ }).click();
     await expect(guestPage.getByTestId('game-paused-banner')).toBeHidden();
 
-    await hostPage.getByRole('button', { name: /暂停世界/ }).click();
+    await hostPage.getByRole('button', { name: /暂停/ }).click();
     await expect(guestPage.getByTestId('game-paused-banner')).toBeVisible();
 
     await guestPage.close();
@@ -156,14 +157,18 @@ test('two browser sessions can create, join, ready, start and reconnect', async 
     await expect(hostPage.getByRole('button', { name: /AI 托管管理/ })).toHaveCount(0);
     await expect(guestPage.getByTestId('game-paused-banner')).toBeVisible();
 
-    await hostPage.getByRole('button', { name: '布局' }).click();
-    await hostPage.getByRole('button', { name: '3D RPG' }).click();
+    // 「布局」常驻顶栏（切视角是高频动作，不再收进「更多」菜单）
+    const hostSwitchViewMode = async (mode: '3D RPG' | '经典 2D') => {
+        await hostPage.getByRole('button', { name: '布局', exact: true }).click();
+        await hostPage.getByRole('button', { name: mode, exact: true }).click();
+    };
+
+    await hostSwitchViewMode('3D RPG');
     await expect(hostPage.getByTestId('voxel-rpg-canvas')).toBeVisible({ timeout: 15_000 });
     await expect(hostPage.getByTestId('rpg-hud')).toBeVisible();
     await expect(hostPage.getByTestId('rpg-hud').getByText('未知职业').first()).toBeVisible();
 
-    await hostPage.getByRole('button', { name: '布局' }).click();
-    await hostPage.getByRole('button', { name: '经典 2D' }).click();
+    await hostSwitchViewMode('经典 2D');
     await expect(hostPage.getByTestId('voxel-rpg-canvas')).toHaveCount(0);
 
     await hostContext.close();

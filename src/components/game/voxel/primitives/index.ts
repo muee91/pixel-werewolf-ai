@@ -14,6 +14,6 @@ export {
 } from './PixelSprites';
 export { PixelAvatar, PixelAvatarHead } from './PixelAvatar';
 export type { RoleKit, PixelAvatarProps } from './PixelAvatar';
-export { McSpriteCanvas, McIcon, shadeHex } from './McSprite';
+export { CampSpriteCanvas, CampSpriteFrames, CampIcon, shadeHex } from './CampSprite';
 export { PixelIcon, type PixelIconName } from './PixelIcon';
 export { BlockButton, BlockPanel, BlockModal } from './BlockUi';

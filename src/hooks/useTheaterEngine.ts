@@ -18,7 +18,7 @@ import {
     remoteServerConfigAtom
 } from '../atoms';
 import { useGameTurn } from './useGameTurn';
-import { TTSPreset, TTSFineTune, Perspective, GameLog, Player, GamePhase, TimelineEvent, GlobalApiConfig, ActorProfile } from '../types';
+import { TTSPreset, TTSFineTune, GameLog, Player, TimelineEvent, GlobalApiConfig, ActorProfile } from '../types';
 import { shouldExperienceLog } from '../utils/visibility';
 import { detectDeaths } from '../utils/replayDeaths';
 import { AudioService } from '../audio';
@@ -97,7 +97,7 @@ export const useTheaterEngine = () => {
     const timeline = useAtomValue(timelineAtom);
     const replayLogs = useAtomValue(replaySourceLogsAtom);
 
-    const [isTheater, setIsTheater] = useAtom(isTheaterModeAtom);
+    const isTheater = useAtomValue(isTheaterModeAtom);
     const setSpeaker = useSetAtom(currentSpeakerIdAtom);
     const setLogs = useSetAtom(logsAtom);
     const setPhase = useSetAtom(gamePhaseAtom);
@@ -202,7 +202,7 @@ export const useTheaterEngine = () => {
                         // --- Just-In-Time Prefetch Logic ---
                         let nextEvent: TimelineEvent | null = null;
                         let nextSpeakerId: number | undefined = undefined;
-                        let lookaheadCursor = timelineCursor; // Start searching from where we left off
+                        const lookaheadCursor = timelineCursor; // Start searching from where we left off
 
                         for (let j = i + 1; j < replayLogs.length; j++) {
                             const futureLog = replayLogs[j];

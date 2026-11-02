@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { McIcon } from '../components/game/voxel/primitives';
+import { CampIcon } from '../components/game/voxel/primitives';
 import clsx from 'clsx';
 import { useRoomService } from './useRoomService';
 import { RoomState, RoomPlayer } from '../multiplayer/types';
@@ -8,15 +8,18 @@ import { PingIndicator } from './PingIndicator';
 import { useAtom } from 'jotai';
 import { multiplayerPingAtom } from '../atoms';
 import { MultiplayerShell } from './MultiplayerShell';
+import { showToast, confirmDialog } from '../utils/notify';
 
 interface RoomWaitingProps {
     room: RoomState;
     playerId: string;
     nickname: string;
+    /** 房主侧「连接不稳」的座位（静默已超过宽限期的一半）；客人侧不传，沿用原有断线文案 */
+    unstablePlayerIds?: Set<string>;
     onBack: () => void;
 }
 
-export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, nickname, onBack }) => {
+export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, unstablePlayerIds, onBack }) => {
     const { leaveRoom, setReady, startGame, kickPlayer, changePreset, changeSeat, addBot } = useRoomService();
     const isHost = room.hostPlayerId === playerId;
     const myPlayer = room.players.find(p => p.playerId === playerId);
@@ -55,10 +58,15 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
     };
 
     const handleKick = async (targetPlayerId: string, targetNickname: string) => {
-        if (!confirm(`确定将 ${targetNickname} 踢出房间吗？`)) return;
+        const ok = await confirmDialog(`确定将 ${targetNickname} 踢出房间吗？`, {
+            title: '踢出玩家',
+            confirmLabel: '踢出',
+            danger: true,
+        });
+        if (!ok) return;
         const result = await kickPlayer(room.roomId, playerId, targetPlayerId);
         if (!result.success) {
-            alert(result.error || '踢人失败');
+            showToast(result.error || '踢人失败', 'error');
         }
     };
 
@@ -85,7 +93,7 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
             right={
                 <div className="text-right">
                     <div className="text-xs font-bold" style={{ color: 'var(--voxel-paper-dim)' }}>{room.players.length}/{room.maxPlayers} 玩家</div>
-                    <div className="text-[11px] font-black" style={{ color: 'var(--voxel-torch)' }}>{room.maxPlayers}人局</div>
+                    <div className="text-xs font-black" style={{ color: 'var(--voxel-torch)' }}>{room.maxPlayers}人局</div>
                 </div>
             }
             footer={
@@ -96,7 +104,7 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                                 <button
                                     onClick={() => addBot()}
                                     className="w-full border-[3px] py-2 font-black transition-all active:translate-x-[2px] active:translate-y-[2px]"
-                                    style={{ background: 'var(--voxel-wood)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)', boxShadow: '3px 3px 0 var(--voxel-ink)' }}
+                                    style={{ background: 'var(--color-card)', color: 'var(--voxel-paper)', borderColor: 'var(--voxel-ink)', boxShadow: '3px 3px 0 var(--voxel-ink)' }}
                                     title="加入一个内置 AI 玩家（规则大脑，无需配置 LLM）"
                                 >
                                     🤖 添加 AI 玩家（离线）
@@ -152,7 +160,7 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                 >
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                            <span className="text-lg"><McIcon icon={presetInfo?.icon || 'mc:map'} px={1} /></span>
+                            <span className="text-lg"><CampIcon icon={presetInfo?.icon || 'tile:map'} px={1} /></span>
                             <span className="font-black" style={{ color: 'var(--voxel-paper)' }}>{presetInfo?.label || room.presetKey}</span>
                         </div>
                         {isHost && (
@@ -180,13 +188,13 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                                         borderColor: 'var(--voxel-ink)',
                                     }}
                                 >
-                                    <span className="text-base"><McIcon icon={preset.icon} px={1} /></span>
+                                    <span className="text-base"><CampIcon icon={preset.icon} px={1} /></span>
                                     <div className="flex-1">
                                         <div className="text-sm font-black" style={{ color: preset.key === room.presetKey ? 'var(--voxel-ink)' : 'var(--voxel-paper)' }}>
                                             {preset.label}
-                                            {preset.key === room.presetKey && <span className="ml-1 text-[10px]">✓ 当前</span>}
+                                            {preset.key === room.presetKey && <span className="ml-1 text-xs">✓ 当前</span>}
                                         </div>
-                                        <div className="text-[10px]" style={{ color: preset.key === room.presetKey ? 'var(--voxel-ink-soft)' : 'var(--voxel-paper-dim)' }}>{preset.playerCount}人 · {preset.description}</div>
+                                        <div className="text-xs" style={{ color: preset.key === room.presetKey ? 'var(--voxel-ink-soft)' : 'var(--voxel-paper-dim)' }}>{preset.playerCount}人 · {preset.description}</div>
                                     </div>
                                 </button>
                             ))}
@@ -210,9 +218,11 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                             const isDisconnected = seatedPlayer?.isConnected === false;
 
                             return (
+                                // 踢人键必须是座位卡的**兄弟**节点：嵌在 disabled 的 <button> 里时，
+                                // 浏览器根本不会给子元素派发 click（房主点 ✕ 毫无反应）。
+                                <div key={seatNum} className="relative flex">
                                 <button
                                     type="button"
-                                    key={seatNum}
                                     disabled={!isEmpty}
                                     aria-label={isEmpty ? `${seatNum}号空位` : `${seatNum}号 ${seatedPlayer.nickname}`}
                                     onClick={() => {
@@ -223,7 +233,7 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                                         }
                                     }}
                                     className={clsx(
-                                        'relative flex flex-col items-center gap-1 px-2 py-3 border-[3px] transition-all',
+                                        'flex h-full w-full min-w-0 flex-col items-center gap-1 px-1.5 py-3 border-[3px] transition-all',
                                         isEmpty ? 'cursor-pointer' : 'cursor-default',
                                         isMe
                                             ? 'shadow-[3px_3px_0_var(--voxel-ink)]'
@@ -247,7 +257,7 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                                         }}>
                                         {seatNum}
                                     </div>
-                                    <div className="text-[10px] font-medium text-center leading-tight truncate w-full" style={{ color: isDisconnected ? 'var(--voxel-paper)' : 'var(--voxel-paper)' }}>
+                                    <div className="text-xs font-medium text-center leading-tight truncate w-full" style={{ color: isDisconnected ? 'var(--voxel-paper)' : 'var(--voxel-paper)' }}>
                                         {seatedPlayer
                                             ? isMe
                                                 ? `${seatedPlayer.nickname}`
@@ -256,9 +266,13 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                                         }
                                     </div>
                                     {seatedPlayer && (
-                                        <div className="text-[9px]" style={{ color: isDisconnected ? 'var(--voxel-paper)' : 'var(--voxel-paper-dim)' }}>
+                                        <div className="text-xs truncate max-w-full" style={{ color: isDisconnected ? 'var(--voxel-paper)' : 'var(--voxel-paper-dim)' }}>
                                             {isDisconnected ? '已断线 ✕' : isHostPlayer ? '房主' : seatedPlayer.isReady ? '✓ 已准备' : '未准备'}
                                         </div>
+                                    )}
+                                    {/* 房主侧克制的「连接不稳」提示：还没断线，只是静默超过了宽限期的一半 */}
+                                    {seatedPlayer && isHost && !isDisconnected && !isHostPlayer && unstablePlayerIds?.has(seatedPlayer.playerId) && (
+                                        <div className="text-[10px] font-bold" style={{ color: 'var(--voxel-torch)' }}>连接不稳</div>
                                     )}
                                     {seatedPlayer && seatedPlayer.playerId !== room.hostPlayerId && !(isHost && seatedPlayer.playerId === playerId) && (
                                         <PingIndicator
@@ -268,21 +282,25 @@ export const RoomWaitingView: React.FC<RoomWaitingProps> = ({ room, playerId, ni
                                         />
                                     )}
                                     {isMe && !isHostPlayer && (
-                                        <span className="text-[9px]" style={{ color: 'var(--voxel-torch)' }}>(自己)</span>
+                                        <span className="text-xs" style={{ color: 'var(--voxel-torch)' }}>(自己)</span>
                                     )}
                                     {isHostPlayer && seatedPlayer && (
-                                        <span className="text-[9px]" style={{ color: 'var(--voxel-torch)' }}>🖥️</span>
+                                        <span className="text-xs" style={{ color: 'var(--voxel-torch)' }}>🖥️</span>
                                     )}
+                                </button>
                                     {seatedPlayer && !isMe && isHost && !isHostPlayer && (
                                         <button
-                                            onClick={(e) => { e.stopPropagation(); handleKick(seatedPlayer.playerId, seatedPlayer.nickname); }}
-                                            className="absolute top-1 right-1 text-[9px] z-10 bg-black/40"
+                                            type="button"
+                                            onClick={() => handleKick(seatedPlayer.playerId, seatedPlayer.nickname)}
+                                            aria-label={`踢出 ${seatedPlayer.nickname}`}
+                                            title={`踢出 ${seatedPlayer.nickname}`}
+                                            className="absolute right-0.5 top-0.5 z-10 flex min-h-7 min-w-7 items-center justify-center bg-black/40 text-sm leading-none"
                                             style={{ color: 'var(--voxel-paper)' }}
                                         >
                                             ✕
                                         </button>
                                     )}
-                                </button>
+                                </div>
                             );
                         })}
                     </div>

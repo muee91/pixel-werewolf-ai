@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import { clsx } from 'clsx';
 import {
     appScreenAtom,
@@ -10,11 +10,9 @@ import {
     logsAtom,
     gameTracesAtom,
     playersAtom,
-    turnCountAtom,
-    isReplayModeAtom,
-    globalApiConfigAtom
+    turnCountAtom
 } from '../store';
-import { PHASE_LABELS, ROLE_INFO } from '../types';
+import { PHASE_LABELS, ROLE_INFO, type GameLog } from '../types';
 
 type DebugLogFilter = 'ALL' | 'EVENT' | 'AI' | 'SYSTEM' | 'PRIVATE' | 'DECISION';
 
@@ -35,6 +33,13 @@ const formatDuration = (durationMs?: number) => {
     return `${(durationMs / 1000).toFixed(1)}s`;
 };
 
+// 关闭面板时 useMemo 必须返回稳定引用（hooks 无条件调用，计算在回调内条件执行），
+// 否则每次日志追加都会因新空数组引用反复重算下游 memo。
+const EMPTY_LOGS: GameLog[] = [];
+const EMPTY_FILTER_COUNTS: Record<DebugLogFilter, number> = {
+    ALL: 0, EVENT: 0, AI: 0, SYSTEM: 0, PRIVATE: 0, DECISION: 0
+};
+
 const DebugLogOverlay: React.FC = () => {
     const [isOpen, setIsOpen] = useAtom(debugLogPanelOpenAtom);
     const [debugMode, setDebugMode] = useAtom(debugModeAtom);
@@ -45,13 +50,17 @@ const DebugLogOverlay: React.FC = () => {
     const phase = useAtomValue(gamePhaseAtom);
     const turn = useAtomValue(turnCountAtom);
     const appScreen = useAtomValue(appScreenAtom);
-    const isReplayMode = useAtomValue(isReplayModeAtom);
-    const [globalConfig, setGlobalConfig] = useAtom(globalApiConfigAtom);
     const [logFilter, setLogFilter] = useState<DebugLogFilter>('ALL');
     const [playersCollapsed, setPlayersCollapsed] = useState(true);
-    // 内容日志与事件流痕迹在此合并成完整调试视图；痕迹平时不混入过程日志/AI 上下文/存档
-    const allLogs = useMemo(() => [...logs, ...traces].sort((a, b) => a.timestamp - b.timestamp), [logs, traces]);
+    // 内容日志与事件流痕迹在此合并成完整调试视图；痕迹平时不混入过程日志/AI 上下文/存档。
+    // 面板常驻挂载：关闭时跳过 merge+sort+filter 全量计算（每条日志追加都会触发依赖变更），
+    // 打开时行为与原先完全一致。
+    const allLogs = useMemo(
+        () => (isOpen ? [...logs, ...traces].sort((a, b) => a.timestamp - b.timestamp) : EMPTY_LOGS),
+        [isOpen, logs, traces]
+    );
     const filteredLogs = useMemo(() => {
+        if (!isOpen) return EMPTY_LOGS;
         switch (logFilter) {
             case 'EVENT':
                 return allLogs.filter(log => log.debugType === 'EVENT_TRACE');
@@ -66,15 +75,18 @@ const DebugLogOverlay: React.FC = () => {
             default:
                 return allLogs;
         }
-    }, [logFilter, allLogs]);
-    const filterCounts = useMemo<Record<DebugLogFilter, number>>(() => ({
-        ALL: allLogs.length,
-        EVENT: traces.length,
-        AI: allLogs.filter(log => log.debugType === 'AI_THINKING' || STRATEGY_DEBUG_TYPES.has(log.debugType || '')).length,
-        SYSTEM: allLogs.filter(log => log.isSystem && !log.debugType).length,
-        PRIVATE: allLogs.filter(log => !!log.visibleTo?.length).length,
-        DECISION: allLogs.filter(log => STRATEGY_DEBUG_TYPES.has(log.debugType || '')).length
-    }), [allLogs, traces.length]);
+    }, [isOpen, logFilter, allLogs]);
+    const filterCounts = useMemo<Record<DebugLogFilter, number>>(() => {
+        if (!isOpen) return EMPTY_FILTER_COUNTS;
+        return {
+            ALL: allLogs.length,
+            EVENT: traces.length,
+            AI: allLogs.filter(log => log.debugType === 'AI_THINKING' || STRATEGY_DEBUG_TYPES.has(log.debugType || '')).length,
+            SYSTEM: allLogs.filter(log => log.isSystem && !log.debugType).length,
+            PRIVATE: allLogs.filter(log => !!log.visibleTo?.length).length,
+            DECISION: allLogs.filter(log => STRATEGY_DEBUG_TYPES.has(log.debugType || '')).length
+        };
+    }, [isOpen, allLogs, traces.length]);
 
     const handleExportLogs = useCallback(() => {
         const exportedAt = new Date().toISOString();
@@ -121,7 +133,7 @@ const DebugLogOverlay: React.FC = () => {
         <>
             {isOpen && (
                 <div className="fixed inset-0 z-[130] pointer-events-none">
-                    <div className="absolute inset-0 bg-black/72 pointer-events-auto" onClick={() => setIsOpen(false)} />
+                    <div className="absolute inset-0 bg-black/70 pointer-events-auto" onClick={() => setIsOpen(false)} />
                     <aside className="absolute right-3 top-3 bottom-16 w-[min(38rem,calc(100vw-1.5rem))] overflow-hidden rounded-3xl border border-th-border/30 text-th-fg shadow-2xl pointer-events-auto flex flex-col" style={{ background: 'color-mix(in srgb, var(--color-bg) 96%, black)' }}>
                         <header className="flex-none border-b border-th-border/10 p-3 sm:p-4">
                             <div className="flex items-center justify-between gap-3">
@@ -131,7 +143,7 @@ const DebugLogOverlay: React.FC = () => {
                                 </div>
                                 <button
                                     onClick={() => setIsOpen(false)}
-                                    className="shrink-0 rounded-full bg-th-border/10 p-2 text-th-muted hover:bg-th-border/20 hover:text-th-fg"
+                                    className="shrink-0 rounded-none bg-th-border/10 p-2 text-th-muted hover:bg-th-border/20 hover:text-th-fg"
                                     title="关闭"
                                 >
                                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -141,7 +153,7 @@ const DebugLogOverlay: React.FC = () => {
                                 <button
                                     onClick={() => setGodView(!godView)}
                                     className={clsx(
-                                        "rounded-xl px-2 py-1.5 text-[11px] font-bold transition-colors sm:px-3 sm:py-2 sm:text-xs",
+                                        "rounded-none px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 sm:py-2 sm:text-xs",
                                         godView ? "bg-th-accent1 text-white" : "bg-th-border/10 text-th-muted hover:bg-th-border/15"
                                     )}
                                 >
@@ -149,7 +161,7 @@ const DebugLogOverlay: React.FC = () => {
                                 </button>
                                 <button
                                     onClick={handleExportLogs}
-                                    className="rounded-xl bg-th-god/20 px-2 py-1.5 text-[11px] font-bold text-th-god hover:bg-th-god/30 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:py-2 sm:text-xs"
+                                    className="rounded-none bg-th-god/20 px-2 py-1.5 text-xs font-bold text-th-god hover:bg-th-god/30 disabled:cursor-not-allowed disabled:opacity-40 sm:px-3 sm:py-2 sm:text-xs"
                                     disabled={logs.length === 0}
                                     title="导出全量日志和当前筛选日志"
                                 >
@@ -157,7 +169,7 @@ const DebugLogOverlay: React.FC = () => {
                                 </button>
                                 <button
                                     onClick={() => { setIsOpen(false); setGodView(false); setDebugMode(false); }}
-                                    className="rounded-xl bg-th-border/10 px-2 py-1.5 text-[11px] font-bold text-th-muted hover:bg-th-border/15 sm:px-3 sm:py-2 sm:text-xs"
+                                    className="rounded-none bg-th-border/10 px-2 py-1.5 text-xs font-bold text-th-muted hover:bg-th-border/15 sm:px-3 sm:py-2 sm:text-xs"
                                 >
                                     关 Debug
                                 </button>
@@ -168,9 +180,9 @@ const DebugLogOverlay: React.FC = () => {
                                         key={filter}
                                         onClick={() => setLogFilter(filter)}
                                         className={clsx(
-                                            "shrink-0 rounded-xl px-2.5 py-1.5 text-[11px] font-black transition-colors sm:px-3",
+                                            "shrink-0 rounded-none px-2.5 py-1.5 text-xs font-black transition-colors sm:px-3",
                                             logFilter === filter
-                                                ? "bg-th-accent1 text-white shadow-lg shadow-th-accent1/30"
+                                                ? "bg-th-accent1 text-[var(--voxel-ink)] shadow-[3px_3px_0_var(--voxel-ink)]"
                                                 : "bg-th-border/10 text-th-muted hover:bg-th-border/15"
                                         )}
                                     >
@@ -187,20 +199,20 @@ const DebugLogOverlay: React.FC = () => {
                             >
                                 <div className="min-w-0">
                                     <div className="text-xs font-black text-th-muted">玩家身份</div>
-                                    <div className="mt-1 truncate text-[11px] text-th-muted">
+                                    <div className="mt-1 truncate text-xs text-th-muted">
                                         {players.length ? `存活 ${players.filter(p => p.status === 'ALIVE').length} / ${players.length}，点击${playersCollapsed ? '展开' : '收起'}` : '暂无对局玩家'}
                                     </div>
                                 </div>
-                                <span className="shrink-0 rounded-full bg-th-border/10 px-2 py-1 text-[10px] font-black text-th-muted">
+                                <span className="shrink-0 rounded-none bg-th-border/10 px-2 py-1 text-xs font-black text-th-muted">
                                     {playersCollapsed ? '展开' : '收起'}
                                 </span>
                             </button>
                             {!playersCollapsed && (
-                                <div className="mt-3 grid grid-cols-2 gap-1.5 text-[11px] sm:gap-2 sm:text-xs">
+                                <div className="mt-3 grid grid-cols-2 gap-1.5 text-xs sm:gap-2 sm:text-xs">
                                     {players.length === 0 ? (
                                         <div className="col-span-2 text-th-muted">暂无对局玩家</div>
                                     ) : players.map(player => (
-                                        <div key={player.id} className="rounded-xl bg-th-border/5 px-2 py-1.5 sm:px-3 sm:py-2">
+                                        <div key={player.id} className="rounded-none bg-th-border/5 px-2 py-1.5 sm:px-3 sm:py-2">
                                             <span className="font-bold text-th-fg">{player.seatNumber}号</span>
                                             <span className="ml-1.5 text-th-accent1">{ROLE_INFO[player.role]?.label || player.role}</span>
                                             <span className="ml-1.5 text-th-muted">{player.status}</span>
@@ -221,7 +233,8 @@ const DebugLogOverlay: React.FC = () => {
                                     : null;
                                 const isAiFocus = logFilter === 'AI' && (log.debugType === 'AI_THINKING' || STRATEGY_DEBUG_TYPES.has(log.debugType || ''));
                                 const isStrategyType = STRATEGY_DEBUG_TYPES.has(log.debugType || '');
-                                const speakerRoleLabel = godView && log.speakerId ? ROLE_INFO[players.find(p => p.id === log.speakerId)?.role!]?.label : undefined;
+                                const speakerRole = godView && log.speakerId ? players.find(p => p.id === log.speakerId)?.role : undefined;
+                                const speakerRoleLabel = speakerRole ? ROLE_INFO[speakerRole]?.label : undefined;
                                 return (
                                     <article
                                         key={log.id}
@@ -241,7 +254,7 @@ const DebugLogOverlay: React.FC = () => {
                                                     : 'var(--color-card)',
                                         }}
                                     >
-                                        <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-th-muted">
+                                        <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-th-muted">
                                             <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
                                             <span>Day {log.turn}</span>
                                             <span>{PHASE_LABELS[log.phase] || log.phase}</span>
@@ -260,40 +273,40 @@ const DebugLogOverlay: React.FC = () => {
                                         </div>
                                         <div className="font-bold text-th-fg">
                                             {log.speakerName || (log.speakerId ? `${log.speakerId}号玩家` : '上帝')}
-                                            {speakerRoleLabel ? <span className="ml-1 rounded bg-th-border/30 px-1.5 py-0.5 text-th-muted text-[11px] font-medium">{speakerRoleLabel}</span> : null}
+                                            {speakerRoleLabel ? <span className="ml-1 rounded bg-th-border/30 px-1.5 py-0.5 text-th-muted text-xs font-medium">{speakerRoleLabel}</span> : null}
                                         </div>
                                         {isAiFocus && (
-                                            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                                                <div className="rounded-xl p-2" style={{ background: 'color-mix(in srgb, var(--color-bg) 82%, var(--color-card))' }}>
+                                            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                                                <div className="rounded-none p-2" style={{ background: 'color-mix(in srgb, var(--color-bg) 82%, var(--color-card))' }}>
                                                     <div className="text-th-muted">模型</div>
                                                     <div className="mt-0.5 break-words font-bold text-th-fg">{log.modelName || '未知'}</div>
                                                 </div>
-                                                <div className="rounded-xl p-2" style={{ background: 'color-mix(in srgb, var(--color-bg) 82%, var(--color-card))' }}>
+                                                <div className="rounded-none p-2" style={{ background: 'color-mix(in srgb, var(--color-bg) 82%, var(--color-card))' }}>
                                                     <div className="text-th-muted">耗时</div>
                                                     <div className="mt-0.5 font-bold text-th-god">{durationText || '未记录'}</div>
                                                 </div>
                                             </div>
                                         )}
                                         <div className={clsx(
-                                            "mt-2 whitespace-pre-wrap break-words rounded-xl border px-3 py-2.5 text-[12px] leading-6",
-                                            isEventTrace ? "border-th-god/25 text-th-fg" : "border-th-border/10 text-th-fg/92"
+                                            "mt-2 whitespace-pre-wrap break-words rounded-none border px-3 py-2.5 text-[12px] leading-6",
+                                            isEventTrace ? "border-th-god/25 text-th-fg" : "border-th-border/10 text-th-fg/90"
                                         )} style={{ background: 'color-mix(in srgb, var(--color-bg) 86%, black)' }}>
                                             {log.content}
                                         </div>
                                         {godView && log.strategySummary ? (
-                                            <div className="mt-2 rounded-xl p-2 text-[11px] text-th-accent1 ring-1 ring-th-accent1/10" style={{ background: 'color-mix(in srgb, var(--color-accent1) 12%, var(--color-bg))' }}>
+                                            <div className="mt-2 rounded-none p-2 text-xs text-th-accent1 ring-1 ring-th-accent1/10" style={{ background: 'color-mix(in srgb, var(--color-accent1) 12%, var(--color-bg))' }}>
                                                 <span className="font-bold text-th-accent1">公开摘要：</span>
                                                 <span className="whitespace-pre-wrap break-words">{log.strategySummary}</span>
                                             </div>
                                         ) : (godView && (log.debugType === 'AI_THINKING' || isStrategyType)) ? (
-                                            <div className="mt-2 rounded-xl p-2 text-[11px] text-th-accent1 ring-1 ring-th-accent1/10" style={{ background: 'color-mix(in srgb, var(--color-accent1) 12%, var(--color-bg))' }}>
+                                            <div className="mt-2 rounded-none p-2 text-xs text-th-accent1 ring-1 ring-th-accent1/10" style={{ background: 'color-mix(in srgb, var(--color-accent1) 12%, var(--color-bg))' }}>
                                                 未返回公开摘要，可检查 `strategySummary` 输出约束。
                                             </div>
                                         ) : null}
-                                        {godView && log.thought && <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl border border-th-accent1/15 p-3 font-sans text-[11px] leading-5 text-th-accent1" style={{ background: 'color-mix(in srgb, var(--color-bg) 88%, var(--color-accent1))' }}>内部过程：{log.thought}</pre>}
+                                        {godView && log.thought && <pre className="mt-2 whitespace-pre-wrap break-words rounded-none border border-th-accent1/15 p-3 font-sans text-xs leading-5 text-th-accent1" style={{ background: 'color-mix(in srgb, var(--color-bg) 88%, var(--color-accent1))' }}>内部过程：{log.thought}</pre>}
                                         {log.debugData && (
                                             <details className={clsx(
-                                                "mt-2 rounded-xl p-2 text-[11px] text-th-muted",
+                                                "mt-2 rounded-none p-2 text-xs text-th-muted",
                                                 isEventTrace ? "open:ring-1 open:ring-th-god/30" : "open:ring-1 open:ring-th-accent1/20"
                                             )} style={{ background: 'color-mix(in srgb, var(--color-bg) 82%, var(--color-card))' }}>
                                                 <summary className={clsx(
@@ -302,7 +315,7 @@ const DebugLogOverlay: React.FC = () => {
                                                 )}>
                                                     调试详情
                                                 </summary>
-                                                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg p-3 font-th-mono text-[10px] leading-5 text-th-fg custom-scrollbar" style={{ background: 'color-mix(in srgb, var(--color-bg) 94%, black)' }}>{JSON.stringify(log.debugData, null, 2)}</pre>
+                                                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg p-3 font-th-mono text-xs leading-5 text-th-fg custom-scrollbar" style={{ background: 'color-mix(in srgb, var(--color-bg) 94%, black)' }}>{JSON.stringify(log.debugData, null, 2)}</pre>
                                             </details>
                                         )}
                                     </article>

@@ -54,3 +54,25 @@ test-results/
 venv/
 yarn-debug.log*
 yarn-error.log*
+.playwright-mcp/
+
+# 开源前不再入库的本地产物（素材评测证据 / AI 工具会话产物 / 脚手架残留）
+artifacts/
+.impeccable/
+.finesse/
+metadata.json
+out/
+spark-output/
+.workbuddy/
+scripts/_mean.mjs
+
+# 3D 形象对照台：本机调试脚手架与素材（体积大，素材按 compare3d/README.md 重新下载）
+compare3d/
+compare3d.html
+
+# 本机调试脚本（探针/截图工具，SceneDirector 里的调试探针注释指向它们）
+scripts/debug/
+
+# KayKit 原包（CC0，35 MB，按 public/models/kaykit/README.md 重新下载）
+vendor/kaykit/
+vendor/kaykit-skeletons/

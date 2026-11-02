@@ -1,17 +1,21 @@
 
 import React, { useState } from 'react';
-import { McIcon } from './game/voxel/primitives';
+import { CampIcon } from './game/voxel/primitives';
 import { useSetAtom } from 'jotai';
 import { appScreenAtom } from '../store';
-import { GAME_PRESETS, ROLE_INFO, Role, WOLF_ROLES, GOD_ROLES } from '../types';
+import { GAME_PRESETS, ROLE_INFO, Role } from '../types';
 import { clsx } from 'clsx';
 
+// 三阵营的色与对局内座位卡同源(狼红 / 神金 / 民绿),这样手册里认的色回牌桌上还认得出。
+// 一律实心色块:渐变在体素语言里没有出处,金→绿那段过渡还会调出一片脏黄绿。
 const ROLES_DATA = [
     {
         team: 'wolf' as const,
         teamLabel: '狼人阵营',
         teamIcon: '🐺',
-        teamColor: 'from-th-accent2 to-th-accent2',
+        // 纯红石上白字只有 4.2:1,压深红石到 5.45:1
+        headerBg: 'var(--voxel-redstone-deep)',
+        headerFg: 'var(--voxel-solid-white)',
         teamBg: 'bg-th-accent2/10',
         teamBorder: 'border-th-accent2/20',
         roles: [
@@ -26,7 +30,8 @@ const ROLES_DATA = [
         team: 'god' as const,
         teamLabel: '神职阵营',
         teamIcon: '✨',
-        teamColor: 'from-th-accent1 to-th-accent3',
+        headerBg: 'var(--voxel-torch)',
+        headerFg: 'var(--voxel-ink)',
         teamBg: 'bg-th-accent1/10',
         teamBorder: 'border-th-accent1/20',
         roles: [
@@ -46,9 +51,10 @@ const ROLES_DATA = [
         team: 'villager' as const,
         teamLabel: '平民阵营',
         teamIcon: '🧑',
-        teamColor: 'from-th-muted to-th-muted',
-        teamBg: 'bg-th-bg2',
-        teamBorder: 'border-th-border',
+        headerBg: 'var(--voxel-emerald)',
+        headerFg: 'var(--voxel-ink)',
+        teamBg: 'bg-th-accent3/10',
+        teamBorder: 'border-th-accent3/25',
         roles: [
             { role: Role.VILLAGER, desc: '没有特殊技能，依靠逻辑推理和发言分析找出狼人。是好人阵营的基石。', skills: ['投票权'] },
         ]
@@ -86,11 +92,16 @@ const RulesView = () => {
                     <span className="text-2xl">📖</span>
                     <h2 className="text-lg font-black text-th-fg tracking-tight">规则手册</h2>
                 </div>
-                <button onClick={() => setScreen('HOME')} className="text-th-muted font-bold hover:text-th-fg transition-colors">关闭</button>
+                <button
+                    onClick={() => setScreen('HOME')}
+                    className="flex min-h-10 items-center border-[3px] border-th-border bg-th-bg2 px-3 text-xs font-black text-th-fg transition-colors hover:border-th-accent1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                >
+                    关闭
+                </button>
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar relative z-10">
-                <div className="max-w-2xl mx-auto w-full p-4 pb-[calc(2rem+var(--safe-area-inset-bottom))]">
+                <div className="mx-auto w-full max-w-4xl p-4 pb-[calc(2rem+var(--safe-area-inset-bottom))]">
                     <div className="flex gap-1 p-1 bg-th-card/70 rounded-none border-[3px] border-th-border shadow-[3px_3px_0_var(--voxel-ink)] mb-4">
                         {([
                             { key: 'roles' as TabType, label: '角色图鉴', icon: '🎭' },
@@ -101,7 +112,7 @@ const RulesView = () => {
                                 key={tab.key}
                                 onClick={() => setActiveTab(tab.key)}
                                 className={clsx(
-                                    "flex-1 py-2.5 rounded-none text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1",
+                                    "flex-1 min-h-10 py-2.5 rounded-none text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1",
                                     activeTab === tab.key
                                         ? "bg-th-accent1 text-white shadow-[3px_3px_0_var(--voxel-ink)]"
                                         : "text-th-muted hover:text-th-fg hover:bg-th-bg2"
@@ -117,7 +128,7 @@ const RulesView = () => {
                         <div className="space-y-4">
                             {ROLES_DATA.map(team => (
                                 <div key={team.team} className={clsx("rounded-none border-[3px] overflow-hidden", team.teamBorder)}>
-                                    <div className={clsx("px-4 py-3 bg-gradient-to-r text-white flex items-center gap-2", team.teamColor)}>
+                                    <div className="flex items-center gap-2 border-b-[3px] border-[var(--voxel-ink)] px-4 py-3" style={{ background: team.headerBg, color: team.headerFg }}>
                                         <span className="text-xl">{team.teamIcon}</span>
                                         <span className="font-black text-base">{team.teamLabel}</span>
                                     </div>
@@ -134,19 +145,32 @@ const RulesView = () => {
                                                         isExpanded ? "border-th-accent1/30 shadow-[3px_3px_0_var(--voxel-ink)]" : "border-th-border hover:border-th-border"
                                                     )}
                                                 >
-                                                    <div className="px-4 py-3 flex items-center gap-3">
-                                                        <span className="text-2xl">{info.icon}</span>
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="font-bold text-th-fg text-sm">{info.label}</div>
-                                                            {!isExpanded && (
-                                                                <div className="text-[11px] text-th-muted truncate mt-0.5">{r.desc}</div>
-                                                            )}
+                                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3">
+                                                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                                                            <span className="text-2xl">{info.icon}</span>
+                                                            <div className="min-w-0">
+                                                                <div className="font-bold text-th-fg text-sm">{info.label}</div>
+                                                                {!isExpanded && (
+                                                                    <div className="mt-0.5 text-xs text-th-muted line-clamp-2">{r.desc}</div>
+                                                                )}
+                                                            </div>
                                                         </div>
-                                                        <div className="flex gap-1 flex-shrink-0">
+                                                        {/* 窄屏技能标签独占一行：三个标签挤在名字右边会把描述压成「狼…」 */}
+                                                        <div className="order-last flex w-full flex-wrap items-center gap-1 sm:order-none sm:w-auto sm:flex-shrink-0">
                                                             {r.skills.map(s => (
-                                                                <span key={s} className="text-[9px] font-bold px-1.5 py-0.5 rounded-none bg-th-accent1/10 text-th-accent1 whitespace-nowrap">{s}</span>
+                                                                /* 10% 的火把色压在暗木上等于没有底：标签读起来是一串浮在右边的字。
+                                                                   补一道同色描边，它才回到「标签」而不是「正文」 */
+                                                                <span key={s} className="text-xs font-bold px-1.5 py-0.5 rounded-none border-2 border-th-accent1/30 bg-th-accent1/10 text-th-accent1 whitespace-nowrap">{s}</span>
                                                             ))}
                                                         </div>
+                                                        {/* 展开箭头单独一格：塞进技能组里时，三个技能标签一撑就被挤出可视区 */}
+                                                        <span
+                                                            aria-hidden="true"
+                                                            className="w-3 flex-shrink-0 text-center text-xs font-black text-th-muted transition-transform"
+                                                            style={{ transform: isExpanded ? 'rotate(90deg)' : undefined }}
+                                                        >
+                                                            ›
+                                                        </span>
                                                     </div>
                                                     {isExpanded && (
                                                         <div className="px-4 pb-3 pt-0">
@@ -165,7 +189,7 @@ const RulesView = () => {
                     {activeTab === 'flow' && (
                         <div className="space-y-4">
                             <div className="bg-th-card/70 rounded-none border-[3px] border-th-border overflow-hidden shadow-[3px_3px_0_var(--voxel-ink)]">
-                                <div className="px-4 py-3 bg-gradient-to-r from-th-accent1 to-th-accent3 text-white">
+                                <div className="border-b-[3px] border-[var(--voxel-ink)] px-4 py-3" style={{ background: 'var(--voxel-torch)', color: 'var(--voxel-ink)' }}>
                                     <div className="font-black text-base flex items-center gap-2">
                                         <span>🔄</span> 标准游戏流程
                                     </div>
@@ -187,7 +211,7 @@ const RulesView = () => {
                             </div>
 
                             <div className="bg-th-card/70 rounded-none border-[3px] border-th-border overflow-hidden shadow-[3px_3px_0_var(--voxel-ink)]">
-                                <div className="px-4 py-3 bg-gradient-to-r from-th-accent1 to-th-accent1 text-white">
+                                <div className="border-b-[3px] border-[var(--voxel-ink)] px-4 py-3" style={{ background: 'var(--voxel-torch)', color: 'var(--voxel-ink)' }}>
                                     <div className="font-black text-base flex items-center gap-2">
                                         <span>🏆</span> 胜利条件
                                     </div>
@@ -220,16 +244,16 @@ const RulesView = () => {
                                 return (
                                     <div key={preset.key} className="bg-th-card/70 rounded-none border-[3px] border-th-border p-4 shadow-[3px_3px_0_var(--voxel-ink)]">
                                         <div className="flex items-center gap-2 mb-2">
-                                            <span className="text-2xl"><McIcon icon={preset.icon} px={2} /></span>
+                                            <span className="text-2xl"><CampIcon icon={preset.icon} px={2} /></span>
                                             <div>
                                                 <div className="font-black text-th-fg text-sm">{preset.label}</div>
-                                                <div className="text-[10px] text-th-muted font-bold">{preset.playerCount}人局</div>
+                                                <div className="text-xs text-th-muted font-bold">{preset.playerCount}人局</div>
                                             </div>
                                         </div>
                                         <div className="text-xs text-th-muted mb-3">{preset.description}</div>
                                         <div className="flex flex-wrap gap-1.5">
                                             {Object.entries(roleCount).map(([name, data]) => (
-                                                <span key={name} className="text-[10px] font-bold px-2 py-1 rounded-none bg-th-bg2 text-th-fg flex items-center gap-1">
+                                                <span key={name} className="text-xs font-bold px-2 py-1 rounded-none bg-th-bg2 text-th-fg flex items-center gap-1">
                                                     <span>{data.icon}</span>
                                                     {name}×{data.count}
                                                 </span>

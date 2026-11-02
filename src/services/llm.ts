@@ -1,8 +1,10 @@
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
-import { LLMPreset, Player, ROLE_INFO, LLMProviderConfig, Role } from '../types';
+import { LLMPreset, LLMProviderConfig } from '../types';
 import { Capacitor } from '@capacitor/core';
 import { probeLocalLlm } from '../utils/localLlmProbe';
+import { corsHintError, isCorsLikelyError } from '../utils/llmErrors';
+import { readSseData, readStreamChunk, splitSseEvents } from './llmStream';
 
 // --- LLM Service ---
 
@@ -94,6 +96,34 @@ const throwIfAborted = (signal?: AbortSignal) => {
 // 否则联机房主端整局会永远卡在等待上。调用方仍可通过自己的 AbortSignal 提前取消。
 const LLM_REQUEST_TIMEOUT_MS = 180000;
 
+// 采集每次调用的 token 与耗时：此前响应里的 usage 被整个丢弃，玩家既看不到一局花多少 token，
+// 也无从判断"慢在哪"（实测单次发言中位 22.5s、输出里 90% 是不可见的思考 token）。
+// 引擎订阅该事件累计到 HUD 读数（llmUsageAtom）。
+export const LLM_USAGE_EVENT = 'werewolf:llm-usage';
+export interface LlmUsageDetail { promptTokens: number; completionTokens: number; reasoningTokens: number; ms: number }
+export { isCorsLikelyError };
+export const LLM_RETRY_EVENT = 'werewolf:llm-retry';export interface LlmRetryDetail { attempt: number; waitMs: number; status: number | undefined; total: number }
+/**
+ * 限流/过载退避是可感知的：实测一次真实整局里出现 3 次 503 与 3 次 fetch failed，
+ * 退避造成的空档最长到 300 秒，而画面此前毫无提示，玩家只能以为"游戏卡死了"。
+ */
+export const reportLlmRetry = (detail: LlmRetryDetail): void => {
+    try { window.dispatchEvent(new CustomEvent(LLM_RETRY_EVENT, { detail })); } catch { /* 非浏览器环境忽略 */ }
+};
+
+export const reportLlmUsage = (data: any, ms: number): void => {
+    const usage = data?.usage || data?.usageMetadata;
+    if (!usage) return;
+    const detail: LlmUsageDetail = {
+        promptTokens: Number(usage.prompt_tokens ?? usage.promptTokenCount ?? 0) || 0,
+        completionTokens: Number(usage.completion_tokens ?? usage.candidatesTokenCount ?? 0) || 0,
+        reasoningTokens: Number(usage.completion_tokens_details?.reasoning_tokens ?? usage.reasoning_tokens ?? 0) || 0,
+        ms: Math.max(0, Math.round(ms)),
+    };
+    if (!detail.promptTokens && !detail.completionTokens) return;
+    try { window.dispatchEvent(new CustomEvent(LLM_USAGE_EVENT, { detail })); } catch { /* 非浏览器环境（单测）忽略 */ }
+};
+
 const abortable = async <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
     if (!signal) return promise;
     throwIfAborted(signal);
@@ -139,13 +169,25 @@ const parseRetryAfterMs = (value: string | null): number | null => {
 };
 
 type StatusedError = Error & { status?: number; retryAfterMs?: number };
+
+/**
+ * 流式回调（可选）。给了 onDelta 就走 SSE，没给就是原来的整段返回。
+ * onDelta 收到的是**累计全文**与本次增量，调用方自己决定是否再解析出可见的 speak。
+ */
+export interface StreamHandlers {
+    onDelta?: (fullText: string, delta: string) => void;
+    /** 思考型模型的 reasoning_content 只报字数：它不该被玩家读到，但"在想多少"是等待期唯一的进度 */
+    onReasoning?: (totalChars: number) => void;
+}
+
 export async function generateText(
     messages: { role: string; content: string }[],
     preset: LLMPreset,
     providerConfig: LLMProviderConfig,
     onProgress?: LLMProgressCallback,
     signal?: AbortSignal,
-    remoteBaseUrl?: string
+    remoteBaseUrl?: string,
+    stream?: StreamHandlers
 ): Promise<string> {
     const doFetch = async () => {
         throwIfAborted(signal);
@@ -162,7 +204,7 @@ export async function generateText(
 
             const ai = new GoogleGenAI({ apiKey });
             let systemInstruction = "";
-            let promptParts: string[] = [];
+            const promptParts: string[] = [];
 
             messages.forEach(m => {
                 if (m.role === 'system') systemInstruction += m.content + "\n\n";
@@ -206,31 +248,96 @@ export async function generateText(
             }
 
             const url = getOpenAICompatibleChatUrl(effective, remoteBaseUrl);
+            const callStartedAt = Date.now();
+            const wantStream = !!stream?.onDelta;
 
-            const body: { model: string; messages: { role: string; content: string }[]; temperature: number } = {
+            const body: { model: string; messages: { role: string; content: string }[]; temperature: number; stream?: boolean; stream_options?: { include_usage: boolean } } = {
                 model: effectiveModelId,
                 messages: messages,
                 temperature: 0.7
             };
+            if (wantStream) {
+                body.stream = true;
+                // 让网关在最后一帧带 usage：否则流式调用会从 HUD 的 token 读数里"消失"
+                body.stream_options = { include_usage: true };
+            }
 
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: getAuthHeaders(effective),
-                body: JSON.stringify(body),
-                signal: controller.signal
-            });
+            let response: Response;
+            try {
+                response = await fetch(url, {
+                    method: 'POST',
+                    headers: getAuthHeaders(effective),
+                    body: JSON.stringify(body),
+                    signal: controller.signal
+                });
+            } catch (error) {
+                // 用户取消要原样抛（上层按中止处理）；其余"连不上"的失败换成能看懂的说明
+                if (isAbortError(error)) throw error;
+                const message = error instanceof Error ? error.message : String(error);
+                if (/Failed to fetch|NetworkError|Load failed|Network request failed/i.test(message)) {
+                    throw corsHintError(message);
+                }
+                throw error;
+            }
 
             if (!response.ok) {
                 const errorText = await response.text();
                 // 标记状态码与 Retry-After，供外层限流退避判断
                 const error: StatusedError = new Error(`LLM API Error (${effective.name}): ${response.status} - ${errorText}`);
                 error.status = response.status;
-                error.retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+                error.retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after')) ?? undefined;
                 throw error;
             }
 
+            const contentType = response.headers.get('content-type') || '';
+            // 有的网关忽略 stream:true 直接回整包 JSON：按非流式处理，别把 JSON 当 SSE 读空
+            if (wantStream && response.body && contentType.includes('text/event-stream')) {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let full = '';
+                let reasoningChars = 0;
+                let streamUsage: any = null;
+
+                const consume = (events: string[]) => {
+                    for (const event of events) {
+                        const payload = readSseData(event);
+                        if (!payload) continue;
+                        const chunk = readStreamChunk(payload);
+                        if (!chunk) continue;
+                        if (chunk.usage) streamUsage = chunk.usage;
+                        if (chunk.reasoning) {
+                            reasoningChars += chunk.reasoning.length;
+                            stream?.onReasoning?.(reasoningChars);
+                        }
+                        if (chunk.content) {
+                            full += chunk.content;
+                            stream?.onDelta?.(full, chunk.content);
+                        }
+                    }
+                };
+
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const cut = splitSseEvents(buffer);
+                    buffer = cut.rest;
+                    consume(cut.events);
+                }
+                buffer += decoder.decode();
+                if (buffer.trim()) consume(splitSseEvents(`${buffer}\n\n`).events);
+                if (streamUsage) reportLlmUsage({ usage: streamUsage }, Date.now() - callStartedAt);
+                return full;
+            }
+
             const data = await response.json();
-            return data.choices?.[0]?.message?.content || "";
+            reportLlmUsage(data, Date.now() - callStartedAt);
+            const content = data.choices?.[0]?.message?.content || "";
+            // 没走成流式（网关不支持/Gemini 原生路径）：一次性把全文交给回调，
+            // 上屏逻辑不变，只是少了"边生成边看"
+            if (wantStream && content) stream?.onDelta?.(content, content);
+            return content;
         }
         } finally {
             window.clearTimeout(timeoutId);
@@ -250,6 +357,7 @@ export async function generateText(
                 if (!retryable || rateLimitAttempt >= RATE_LIMIT_MAX_RETRIES) throw e;
                 const backoff = Math.min(RATE_LIMIT_MAX_DELAY_MS, RATE_LIMIT_BASE_DELAY_MS * 2 ** rateLimitAttempt);
                 const delay = (e as StatusedError).retryAfterMs ?? backoff + Math.random() * 500;
+                reportLlmRetry({ attempt: rateLimitAttempt + 1, waitMs: Math.round(delay), status, total: RATE_LIMIT_MAX_RETRIES });
                 await abortableSleep(delay, signal);
             }
         }
@@ -451,7 +559,7 @@ export const parseLLMResponse = (responseText: string): LLMResponse => {
 
     try {
         return normalizeParsedLLMResponse(JSON.parse(cleanText));
-    } catch (e) {
+    } catch {
         const candidates = [
             ...extractJsonObjectCandidates(cleanText),
             ...extractJsonObjectCandidates(sanitizeJsonLikeText(responseText))
@@ -463,7 +571,7 @@ export const parseLLMResponse = (responseText: string): LLMResponse => {
                 const parsed = normalizeParsedLLMResponse(JSON.parse(sanitizeJsonLikeText(candidate)));
                 if (parsed.speak) return parsed;
                 if (!bestParsed) bestParsed = parsed;
-            } catch (e2) {
+            } catch {
                 // Try next candidate.
             }
         }

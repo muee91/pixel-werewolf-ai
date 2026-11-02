@@ -4,9 +4,9 @@ import { get as idbGetVal, set as idbSetVal, del as idbDelVal } from 'idb-keyval
 import {
     GameConfig, GamePhase, Player, GameLog, GameSnapshot, GameResult, GodState, AgentMessage,
     GAME_PRESETS, DEFAULT_ROLE_PROMPTS, DEFAULT_PHASE_PROMPTS, DEFAULT_GAME_RULES, TimelineEvent,
-    TTSPreset, ActorProfile, GameArchive, LLMPreset, GlobalApiConfig, Role, PlayerStatus, ROLE_INFO,
+    TTSPreset, ActorProfile, GameArchive, LLMPreset, GlobalApiConfig,
     Perspective, LLMProviderConfig, EdgeVoice, TTSState, MinimizedGameState, UserInput,
-    GameEvaluation, LoverState, ThirdPartyState, DEFAULT_GOD_STATE
+    GameEvaluation, LoverState, DEFAULT_GOD_STATE
 } from './types';
 import type { UIConfig } from './themes/types';
 import { THEME_DEFAULTS, normalizeUiConfig } from './themes/types';
@@ -27,14 +27,27 @@ export interface Toast {
 
 export const toastsAtom = atom<Toast[]>([]);
 
-export const addToastAtom = atom(null, (_, set, message: string, type: ToastType = 'info') => {
+export const addToastAtom = atom(null, (_, set, message: string, type: ToastType = 'info', duration?: number) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const toast: Toast = { id, message, type };
     set(toastsAtom, (prev) => [...prev, toast]);
     setTimeout(() => {
         set(toastsAtom, (prev) => prev.filter(t => t.id !== id));
-    }, 3000);
+    }, duration ?? 3000);
 });
+
+// --- 应用内确认(App 挂载 ConfirmDialogHost 渲染,utils/notify.confirmDialog 触发) ---
+export interface ConfirmRequest {
+    title?: string;
+    message: string;
+    confirmLabel?: string;
+    danger?: boolean;
+    resolve: (ok: boolean) => void;
+}
+
+// 显式断言 PrimitiveAtom:本项目未开 strictNullChecks,null 实参会误配 jotai 的
+// 读函数重载(vanilla/atom.d.ts 的 Read<Value>),推出只读 Atom;运行时本是可写 primitive
+export const confirmRequestAtom = atom<ConfirmRequest | null>(null) as PrimitiveAtom<ConfirmRequest | null>;
 
 // Define IndexedDB storage adapter
 const idbStorage = {
@@ -53,8 +66,40 @@ const idbStorage = {
 // 高频游戏态的写入去抖存储：读仍同步走 localStorage（刷新后首帧可恢复对局），
 // 写则合并为尾触发任务——每条日志追加、每次 isSpeaking 切换不再立即全量
 // JSON.stringify 并同步写盘（长局卡顿与配额溢出异常的根因）。
+// 关闭页面时待写任务会被 800ms 定时器截断，pagehide 时同步 flush，避免丢最后一次写入。
 const DEBOUNCE_STORAGE_MS = 800;
-const debounceStorageTimers = new Map<string, ReturnType<typeof setTimeout>>();
+type PendingStorageWrite = { timer: ReturnType<typeof setTimeout>; value: unknown };
+// 本模块可能被 HMR 重复求值：待写表与注册守卫挂在全局作用域，
+// 保证 pagehide 监听只注册一次，且旧监听器与新代码 flush 同一份待写表。
+const globalScope = globalThis as typeof globalThis & {
+    __werewolfPendingGameWrites?: Map<string, PendingStorageWrite>;
+    __werewolfPagehideFlushRegistered?: boolean;
+};
+const pendingGameWrites: Map<string, PendingStorageWrite> =
+    globalScope.__werewolfPendingGameWrites ??= new Map<string, PendingStorageWrite>();
+
+const writeGameStorageNow = (key: string, value: unknown): void => {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+        // 配额溢出时丢弃本次持久化，内存态不受影响
+    }
+};
+
+const flushPendingGameStorageWrites = (): void => {
+    if (pendingGameWrites.size === 0) return;
+    for (const [key, entry] of pendingGameWrites) {
+        clearTimeout(entry.timer);
+        writeGameStorageNow(key, entry.value);
+    }
+    pendingGameWrites.clear();
+};
+
+if (typeof window !== 'undefined' && !globalScope.__werewolfPagehideFlushRegistered) {
+    globalScope.__werewolfPagehideFlushRegistered = true;
+    window.addEventListener('pagehide', flushPendingGameStorageWrites);
+}
+
 const debouncedGameStorage = {
     getItem: <T>(key: string, initialValue: T): T => {
         try {
@@ -65,22 +110,20 @@ const debouncedGameStorage = {
         }
     },
     setItem: <T>(key: string, newValue: T): void => {
-        const pending = debounceStorageTimers.get(key);
-        if (pending) clearTimeout(pending);
-        debounceStorageTimers.set(key, setTimeout(() => {
-            debounceStorageTimers.delete(key);
-            try {
-                localStorage.setItem(key, JSON.stringify(newValue));
-            } catch {
-                // 配额溢出时丢弃本次持久化，内存态不受影响
-            }
-        }, DEBOUNCE_STORAGE_MS));
+        const pending = pendingGameWrites.get(key);
+        if (pending) clearTimeout(pending.timer);
+        // 定时器触发时本条必仍是当前待写：后续 setItem/removeItem/flush 都先清掉它
+        const timer = setTimeout(() => {
+            pendingGameWrites.delete(key);
+            writeGameStorageNow(key, newValue);
+        }, DEBOUNCE_STORAGE_MS);
+        pendingGameWrites.set(key, { timer, value: newValue });
     },
     removeItem: (key: string): void => {
-        const pending = debounceStorageTimers.get(key);
+        const pending = pendingGameWrites.get(key);
         if (pending) {
-            clearTimeout(pending);
-            debounceStorageTimers.delete(key);
+            clearTimeout(pending.timer);
+            pendingGameWrites.delete(key);
         }
         localStorage.removeItem(key);
     },
@@ -90,7 +133,7 @@ const createGameStorageAtom = <T,>(key: string, initialValue: T) =>
     createStorageAtom<T>(key, initialValue, debouncedGameStorage, { getOnInit: true });
 
 // --- State Atoms ---
-export const appScreenAtom = createStorageAtom<'HOME' | 'GAME' | 'SETTINGS' | 'AGENT' | 'HISTORY' | 'RULES' | 'MULTIPLAYER'>('werewolf-appScreen', 'HOME', undefined, { getOnInit: true });
+export const appScreenAtom = createStorageAtom<'HOME' | 'GAME' | 'SETTINGS' | 'AGENT' | 'HISTORY' | 'RULES' | 'MULTIPLAYER' | 'REVIEW'>('werewolf-appScreen', 'HOME', undefined, { getOnInit: true });
 export const minimizedGameAtom = createStorageAtom<MinimizedGameState>('werewolf-minimizedGame', { enabled: false }, undefined, { getOnInit: true });
 
 // Multiplayer state atom
@@ -114,7 +157,9 @@ export const multiplayerStateAtom = createStorageAtom<MultiplayerState>('werewol
     sessionToken: null,
 }, undefined, { getOnInit: true });
 
-export const gameConfigAtom = atom<GameConfig>({
+// 与 players/logs 同一持久化通道：刷新或恢复 minimized 局时，规则与板子必须跟着回来，
+// 否则 AI 会被告知错误的板子描述、第三方局永远判不了胜。
+export const gameConfigAtom = createGameStorageAtom<GameConfig>('werewolf-gameConfig', {
     playerCount: 9,
     roles: GAME_PRESETS[0].roles,
     phasePrompts: { ...DEFAULT_PHASE_PROMPTS },
@@ -186,8 +231,8 @@ if (typeof window !== 'undefined' && !localStorage.getItem(MIGRATED_ACTORS_KEY))
         const raw = localStorage.getItem('werewolf-actorProfiles-v2');
         if (raw) {
             const existing: ActorProfile[] = JSON.parse(raw);
-            let providerRaw = localStorage.getItem('werewolf-llmProviders');
-            let userProviders: LLMProviderConfig[] = providerRaw ? JSON.parse(providerRaw) : defaultLlmProviders;
+            const providerRaw = localStorage.getItem('werewolf-llmProviders');
+            const userProviders: LLMProviderConfig[] = providerRaw ? JSON.parse(providerRaw) : defaultLlmProviders;
             const deepseekProvider = userProviders.find(p => p.id === 'provider-deepseek');
             const deepseekHasApiKey = !!deepseekProvider?.apiKey?.trim();
             let changed = false;
@@ -207,7 +252,20 @@ if (typeof window !== 'undefined' && !localStorage.getItem(MIGRATED_ACTORS_KEY))
 }
 export const actorProfilesAtom = createStorageAtom<ActorProfile[]>('werewolf-actorProfiles-v2', DEFAULT_ACTORS, undefined, { getOnInit: true });
 export const edgeTtsVoicesAtom = createStorageAtom<EdgeVoice[]>('werewolf-edgeTtsVoices', [], undefined, { getOnInit: true });
-export const globalApiConfigAtom = createStorageAtom<GlobalApiConfig>('werewolf-globalApiConfig', { enabled: false, narratorActorId: 'n1' }, undefined, { getOnInit: true });
+// 语音默认开启：观战体验的主通道是"听见 AI 说话"。
+// 没有 TTS 后端时 AudioService 会在超时后静默降级为字幕，不会卡住对局。
+export const globalApiConfigAtom = createStorageAtom<GlobalApiConfig>('werewolf-globalApiConfig', { enabled: true, narratorActorId: 'n1' }, undefined, { getOnInit: true });
+
+/** 本局模型用量累计（HUD 读数用；initGame 归零） */
+export interface LlmUsageTotals {
+    calls: number;
+    promptTokens: number;
+    completionTokens: number;
+    reasoningTokens: number;
+    totalMs: number;
+}
+export const EMPTY_LLM_USAGE: LlmUsageTotals = { calls: 0, promptTokens: 0, completionTokens: 0, reasoningTokens: 0, totalMs: 0 };
+export const llmUsageAtom = atom<LlmUsageTotals>({ ...EMPTY_LLM_USAGE });
 
 // --- Remote Server Config ---
 export interface RemoteServerConfig {
@@ -225,6 +283,15 @@ export const remoteServerConfigAtom = createStorageAtom<RemoteServerConfig>('wer
 export const gameArchivesAtom = atomWithStorage<GameArchive[]>('werewolf-gameArchives', [], idbStorage);
 export const gameArchivesLoadableAtom = loadable(gameArchivesAtom);
 export const lastSavedArchiveAtom = atom<GameArchive | null>(null) as PrimitiveAtom<GameArchive | null>;
+
+/**
+ * 复盘页正在看哪一局：null = 看当前这局（logsAtom/gameResultAtom 里那份）。
+ *
+ * 为什么不复用回放的 replaySourceLogsAtom：回放是"把对局重新演一遍"，
+ * 复盘是"把已经发生的事摊开读"——前者要清空实时日志并逐条推进，
+ * 后者必须只读，否则从历史进来会把正在进行的对局状态清掉。
+ */
+export const reviewArchiveAtom = atom<GameArchive | null>(null) as PrimitiveAtom<GameArchive | null>;
 
 export const timelineAtom = createGameStorageAtom<TimelineEvent[]>('werewolf-currentTimeline', []);
 export const replaySourceLogsAtom = atom<GameLog[]>([]) as StoredAtom<GameLog[]>;
@@ -256,6 +323,27 @@ export const llmThinkingAtom = atom<{
     startedAt: null,
     status: 'idle'
 });
+/**
+ * 流式上屏：模型正在生成的这一句（只出现在"玩家正在等"的那段时间）。
+ *
+ * 单独一个 atom 而不是塞进 llmThinkingAtom：它每秒会变 8 次左右，
+ * 放进房间级的 state 会让整张座位表跟着重渲染；这里只挂一个小小的字幕组件消费它。
+ * 真·发言落账后立即清空，日志里那条才是权威文本。
+ */
+export interface StreamingSpeech {
+    playerId: number;
+    seat: number;
+    text: string;
+    thinkingChars: number;
+    startedAt: number;
+    /**
+     * speech：公开发言，正文可以逐字上屏
+     * decision：投票/退水/开枪这类公开决策。**正文绝不上屏**（里面是策略与目标），
+     *           只把"谁在决策、思考了多少字、等了几秒"当进度显示
+     */
+    kind: 'speech' | 'decision';
+}
+export const streamingSpeechAtom = atom<StreamingSpeech | null>(null) as PrimitiveAtom<StreamingSpeech | null>;
 export const isReplayModeAtom = createStorageAtom<boolean>('werewolf-isReplayMode', false, undefined, { getOnInit: true });
 export const areRolesVisibleAtom = createStorageAtom<boolean>('werewolf-areRolesVisible', true, undefined, { getOnInit: true });
 export const replayPerspectiveAtom = atom<Perspective>('GOOD');

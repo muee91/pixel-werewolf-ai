@@ -80,7 +80,7 @@ const ICONS: Record<PixelIconName, IconDef> = {
         ],
         palette: { y: C.gold, g: '#2f7a3d', c: '#a8e6a8' },
     },
-    // Steve 小人(玩家):发肤衣裤四色
+    // 营地小人(玩家):发肤衣裤四色
     player: {
         rows: [
             '..hhhh..',

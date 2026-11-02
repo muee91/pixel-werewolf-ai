@@ -9,7 +9,8 @@ if (container) {
     const root = createRoot(container);
     root.render(
         <React.Suspense fallback={
-            <div className="h-screen w-screen flex items-center justify-center bg-slate-900 text-slate-200 font-bold">
+            <div className="h-screen w-screen flex items-center justify-center font-bold"
+                style={{ background: 'var(--voxel-night)', color: 'var(--voxel-paper)' }}>
                 加载数据中...
             </div>
         }>

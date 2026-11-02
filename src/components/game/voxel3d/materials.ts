@@ -8,6 +8,10 @@ const cache = new Map<string, THREE.MeshStandardMaterial>();
 
 export interface SharedMatOptions {
   roughness?: number;
+  /** 金属度：石殿的铁盆/铁链要用，方块世界一直是 0 */
+  metalness?: number;
+  /** 平面着色：低多边形石殿的八角柱/棱面盆要硬边，方块世界的贴图不需要 */
+  flat?: boolean;
   emissive?: string;
   emissiveIntensity?: number;
   transparent?: boolean;
@@ -15,13 +19,14 @@ export interface SharedMatOptions {
 }
 
 export function sharedMat(color: string, opts?: SharedMatOptions): THREE.MeshStandardMaterial {
-  const key = `${color}|${opts?.roughness ?? 0.9}|${opts?.emissive ?? ''}|${opts?.emissiveIntensity ?? 1}|${opts?.transparent ? 1 : 0}|${opts?.opacity ?? 1}`;
+  const key = `${color}|${opts?.roughness ?? 0.9}|${opts?.metalness ?? 0}|${opts?.flat ? 1 : 0}|${opts?.emissive ?? ''}|${opts?.emissiveIntensity ?? 1}|${opts?.transparent ? 1 : 0}|${opts?.opacity ?? 1}`;
   let mat = cache.get(key);
   if (!mat) {
     mat = new THREE.MeshStandardMaterial({
       color,
       roughness: opts?.roughness ?? 0.9,
-      metalness: 0,
+      metalness: opts?.metalness ?? 0,
+      flatShading: opts?.flat ?? false,
       emissive: opts?.emissive ?? '#000000',
       emissiveIntensity: opts?.emissiveIntensity ?? 1,
       transparent: opts?.transparent ?? false,
@@ -37,7 +42,18 @@ export function sharedMat(color: string, opts?: SharedMatOptions): THREE.MeshSta
 
 const blockCache = new Map<string, THREE.Material | THREE.Material[]>();
 
-export type BlockKind = 'grass' | 'dirt' | 'stone' | 'cobble' | 'log' | 'leaves' | 'planks' | 'birch' | 'hay' | 'sand';
+export type BlockKind =
+  | 'grass' | 'dirt' | 'stone' | 'cobble' | 'log' | 'leaves' | 'planks' | 'birch' | 'hay' | 'sand'
+  // 群系变体（同一套像素图换调色，见 camp-blocks.ts）
+  | 'snow' | 'dry' | 'sandstone' | 'dungeonWall' | 'dungeonFloor'
+  | 'pineLeaves' | 'snowLeaves' | 'mapleLeaves' | 'packedSnow';
+
+/** 草皮类方块：侧面/顶面/底面分开贴（雪地、枯草与草同一套逻辑） */
+const TURF_KINDS: Partial<Record<BlockKind, { top: TexName; side: TexName }>> = {
+  grass: { top: 'grassTop', side: 'grassSide' },
+  snow: { top: 'snowTop', side: 'snowSide' },
+  dry: { top: 'dryTop', side: 'drySide' },
+};
 
 export function blockMat(kind: BlockKind, rx = 1, rz = 1): THREE.Material | THREE.Material[] {
   const key = `${kind}|${rx}|${rz}`;
@@ -51,15 +67,16 @@ export function blockMat(kind: BlockKind, rx = 1, rz = 1): THREE.Material | THRE
     };
     const std = (tex: THREE.Texture) =>
       new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 });
-    if (kind === 'grass') {
+    const turf = TURF_KINDS[kind];
+    if (turf) {
       // 面序：+x -x +y -y +z -z
       m = [
-        std(tiled('grassSide')),
-        std(tiled('grassSide')),
-        std(tiled('grassTop')),
+        std(tiled(turf.side)),
+        std(tiled(turf.side)),
+        std(tiled(turf.top)),
         std(tiled('dirt')),
-        std(tiled('grassSide')),
-        std(tiled('grassSide')),
+        std(tiled(turf.side)),
+        std(tiled(turf.side)),
       ];
     } else {
       const name: TexName =
@@ -70,7 +87,14 @@ export function blockMat(kind: BlockKind, rx = 1, rz = 1): THREE.Material | THRE
         kind === 'leaves' ? 'leaves' :
         kind === 'birch' ? 'birchSide' :
         kind === 'hay' ? 'hay' :
-        kind === 'sand' ? 'sand' : 'planks';
+        kind === 'sand' ? 'sand' :
+        kind === 'sandstone' ? 'sandstone' :
+        kind === 'dungeonWall' ? 'dungeonWall' :
+        kind === 'dungeonFloor' ? 'dungeonFloor' :
+        kind === 'packedSnow' ? 'packedSnow' :
+        kind === 'pineLeaves' ? 'pineLeaves' :
+        kind === 'snowLeaves' ? 'snowLeaves' :
+        kind === 'mapleLeaves' ? 'mapleLeaves' : 'planks';
       m = std(tiled(name));
     }
     blockCache.set(key, m);

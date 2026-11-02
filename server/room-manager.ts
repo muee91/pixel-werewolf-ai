@@ -6,6 +6,67 @@ import { Bonjour } from 'bonjour-service';
 
 const SCRYPT_KEY_LENGTH = 32;
 
+// ── 联机韧性：断线宽限与超限消息 ────────────────────────────
+// 这两条规则都是纯配置/纯构造函数，放在这里是为了能直接单测
+// （room-server.ts 一被 import 就会 listen 端口并广播 mDNS）。
+
+/**
+ * 客人/房主断线后保留座位的宽限时长默认值。
+ * 手机锁屏、切后台几分钟是熟人联机的常态，而客户端重连计划
+ * （RECONNECT_DELAYS_MS = 1s/2s/4s/8s/15s/25s）合计 55 秒，
+ * 原先的 10 秒宽限会在重连预算用完之前就把座位踢掉。
+ */
+export const DEFAULT_DISCONNECT_GRACE_MS = 60_000;
+// 超出这个区间一律视为非法配置（回退默认值），避免 0/负数把宽限直接关掉
+export const MIN_DISCONNECT_GRACE_MS = 5_000;
+export const MAX_DISCONNECT_GRACE_MS = 600_000;
+
+/** 读取 ROOM_DISCONNECT_GRACE_MS：非法值（空、非数字、非整数、越界）回退默认值 */
+export function resolveDisconnectGraceMs(raw: string | undefined | null): number {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmed) return DEFAULT_DISCONNECT_GRACE_MS;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed)) return DEFAULT_DISCONNECT_GRACE_MS;
+  if (parsed < MIN_DISCONNECT_GRACE_MS || parsed > MAX_DISCONNECT_GRACE_MS) return DEFAULT_DISCONNECT_GRACE_MS;
+  return parsed;
+}
+
+/**
+ * 房主侧「连接不稳」的静默阈值：宽限期的一半（取整）。
+ * 断线一半时间还没听到任何入站消息，就值得提示房主，
+ * 但还不至于直接宣布对方掉线。
+ */
+export function resolveUnstableAfterMs(disconnectGraceMs: number): number {
+  return Math.floor(disconnectGraceMs / 2);
+}
+
+// 入站消息上限：一条超长消息（多半是发疯的发言文本）不该静默吃掉发送方的操作
+export const MAX_INBOUND_MESSAGE_BYTES = 1024 * 1024;
+
+// ── 建房配额 ────────────────────────────────────────────────
+// POST /api/rooms 对同网段任意设备开放且建房无成本，没有配额就是内存 DoS
+// （空房要等 30 分钟的 stale 清理才会回收）。
+export const MAX_ROOMS_TOTAL = 64;
+export const MAX_ROOMS_PER_IP = 4;
+export type RoomCreateError = 'ROOM_LIMIT_TOTAL' | 'ROOM_LIMIT_PER_IP';
+
+export interface MessageTooLargeReply {
+  type: 'MESSAGE_TOO_LARGE';
+  reason: string;
+  receivedBytes: number;
+  limitBytes: number;
+}
+
+/** 超限消息的回信：沿用 { type, ...payload } 的现有信封格式，不带 sessionToken */
+export function createMessageTooLargeReply(receivedBytes: number): MessageTooLargeReply {
+  return {
+    type: 'MESSAGE_TOO_LARGE',
+    reason: '这条消息超过房间服务的单条上限，已被丢弃，请缩短内容后重试',
+    receivedBytes,
+    limitBytes: MAX_INBOUND_MESSAGE_BYTES,
+  };
+}
+
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex');
   const derived = scryptSync(password, salt, SCRYPT_KEY_LENGTH).toString('hex');
@@ -31,6 +92,10 @@ export interface RoomPlayer {
   hasUsedAISuggestion: boolean;
   currentTurnSpeech?: string;
   sessionTokenHash?: string;
+  /** 服务端最近一次收到该座位入站消息（含心跳 pong）的时刻，仅房主可见性使用 */
+  lastSeenAt?: number;
+  /** 静默时长已超过宽限期的一半：只影响 UI 提示，不参与任何对局推进 */
+  isUnstable?: boolean;
 }
 
 export interface GameRoom {
@@ -80,7 +145,9 @@ export class RoomManager {
     return room;
   }
 
-  createRoom(hostIp: string, roomName: string, hostNickname: string, presetKey: string = '8-standard', maxPlayers: number = 12, password?: string): GameRoom {
+  createRoom(hostIp: string, roomName: string, hostNickname: string, presetKey: string = '8-standard', maxPlayers: number = 12, password?: string): { room: GameRoom } | { error: RoomCreateError } {
+    if (this.rooms.size >= MAX_ROOMS_TOTAL) return { error: 'ROOM_LIMIT_TOTAL' };
+    if ((this.roomsByIp.get(hostIp)?.size ?? 0) >= MAX_ROOMS_PER_IP) return { error: 'ROOM_LIMIT_PER_IP' };
     const roomId = randomUUID();
     const hostId = randomUUID();
 
@@ -105,6 +172,8 @@ export class RoomManager {
       isReady: true,
       isConnected: true,
       hasUsedAISuggestion: false,
+      lastSeenAt: Date.now(),
+      isUnstable: false,
     });
 
     this.rooms.set(roomId, room);
@@ -114,7 +183,7 @@ export class RoomManager {
     }
     this.roomsByIp.get(hostIp)!.add(roomId);
 
-    return room;
+    return { room };
   }
 
   joinRoom(roomId: string, nickname: string, preferredSeat?: number): { player: RoomPlayer; room: GameRoom } | { error: string } | null {
@@ -142,6 +211,8 @@ export class RoomManager {
       isReady: false,
       isConnected: true,
       hasUsedAISuggestion: false,
+      lastSeenAt: Date.now(),
+      isUnstable: false,
     };
 
     room.players.set(playerId, player);

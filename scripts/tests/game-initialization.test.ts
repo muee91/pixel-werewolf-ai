@@ -4,6 +4,7 @@ import { createStore } from 'jotai/vanilla';
 import {
     actorProfilesAtom,
     DEFAULT_ACTORS,
+    gameConfigAtom,
     globalApiConfigAtom,
     isAutoPlayAtom,
     isHumanModeAtom,
@@ -15,6 +16,7 @@ import {
     setupMultiplayerGameAtom,
     startMultiplayerGameAtom,
 } from '../../src/store';
+import { Role } from '../../src/types';
 import type { ActorProfile } from '../../src/types';
 import { isProviderConfiguredForRuntime } from '../../src/utils/llmConfig';
 
@@ -105,4 +107,42 @@ test('multiplayer guest placeholders survive a narrator-only persisted actor lis
     }));
     assert.equal(store.get(playersAtom).length, 9);
     assert.ok(store.get(playersAtom).every(player => player.actorId));
+});
+
+// ── 开局前配置（人数不变，神职/上警可改） ─────────────────
+
+const customRoles = [
+    Role.WEREWOLF, Role.WEREWOLF, Role.WEREWOLF,
+    Role.VILLAGER, Role.VILLAGER,
+    Role.SEER, Role.WITCH, Role.GUARD, Role.KNIGHT,
+];
+
+test('开局面板改过的神职会真的发到座位上', () => {
+    const store = createNarratorOnlyStore();
+    store.set(initGameAtom, { presetKey: '9-v1', roles: customRoles, sheriffEnabled: false });
+
+    const dealt = store.get(playersAtom).map(player => player.role);
+    assert.equal(dealt.length, 9);
+    assert.equal(dealt.filter(role => role === Role.GUARD).length, 1);
+    assert.equal(dealt.filter(role => role === Role.KNIGHT).length, 1);
+    assert.equal(dealt.filter(role => role === Role.HUNTER).length, 0);
+    assert.equal(store.get(gameConfigAtom).sheriffEnabled, false);
+    assert.equal(store.get(gameConfigAtom).rules.sheriffElection, false);
+});
+
+test('上警开关会同时写进顶层字段与规则层（提示词与 3D 开票板各读一边）', () => {
+    const store = createNarratorOnlyStore();
+    store.set(initGameAtom, { presetKey: '9-v1', sheriffEnabled: true });
+    assert.equal(store.get(gameConfigAtom).sheriffEnabled, true);
+    assert.equal(store.get(gameConfigAtom).rules.sheriffElection, true);
+});
+
+test('人数对不上的脏配置回退板子默认，不会开出一个少一张牌的局', () => {
+    const store = createNarratorOnlyStore();
+    store.set(initGameAtom, { presetKey: '9-v1', roles: [Role.WEREWOLF, Role.SEER] });
+
+    const dealt = store.get(playersAtom).map(player => player.role);
+    assert.equal(dealt.length, 9);
+    assert.equal(dealt.filter(role => role === Role.WEREWOLF).length, 3);
+    assert.equal(dealt.filter(role => role === Role.HUNTER).length, 1);
 });

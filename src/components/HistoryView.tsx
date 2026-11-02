@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useAtom, useSetAtom, useAtomValue } from 'jotai';
+import { useSetAtom, useAtomValue } from 'jotai';
 import { clsx } from 'clsx';
-import { McSpriteCanvas, PixelAvatarHead } from './game/voxel/primitives';
+import { CampSpriteCanvas, PixelAvatarHead } from './game/voxel/primitives';
 import {
     appScreenAtom,
     gameArchivesAtom,
@@ -14,8 +14,10 @@ import {
     minimizedGameAtom,
 } from '../store';
 import { remoteServerConfigAtom } from '../atoms';
-import { GameArchive, GameLog, ROLE_INFO, PHASE_LABELS, TTSPreset, WOLF_ROLES, Role } from '../types';
+import { showToast, confirmDialog } from '../utils/notify';
+import { GameArchive, GameLog, ROLE_INFO, TTSPreset, Role } from '../types';
 import { normalizeGameArchive } from '../utils/archive';
+import { useOpenReview } from '../hooks/useOpenReview';
 import { AudioService, PrefetchResult } from '../audio';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
@@ -68,10 +70,10 @@ const downloadJson = async (payload: unknown, filename: string) => {
                     dialogTitle: '导出对局',
                 });
             } catch {
-                alert(`对局记录已保存到：${savedFile.uri}`);
+                showToast(`对局记录已保存到：${savedFile.uri}`, 'success');
             }
         } catch (error) {
-            alert(`导出失败：${error}`);
+            showToast(`导出失败：${error}`, 'error');
         }
     } else {
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -157,6 +159,7 @@ const handleExportArchive = async (archive: GameArchive, e: React.MouseEvent, mo
 
 const HistoryView = () => {
     const setScreen = useSetAtom(appScreenAtom);
+    const openReview = useOpenReview();
 
     const archivesLoadable = useAtomValue(gameArchivesLoadableAtom);
     const setArchives = useSetAtom(gameArchivesAtom);
@@ -173,8 +176,11 @@ const HistoryView = () => {
     const loadGame = useSetAtom(loadGameArchiveAtom);
     const minimizedGame = useAtomValue(minimizedGameAtom);
     // 有最小化进行中的对局时，任何进入回放的路径都要先确认覆盖
-    const confirmLoadOverLiveGame = () =>
-        !minimizedGame.enabled || window.confirm('当前有一局进行中（已最小化），回放将放弃该局。确定回放？');
+    const confirmLoadOverLiveGame = async () =>
+        !minimizedGame.enabled || await confirmDialog('当前有一局进行中（已最小化），回放将放弃该局。确定回放？', {
+            title: '开始回放？',
+            confirmLabel: '回放',
+        });
 
     const globalConfig = useAtomValue(globalApiConfigAtom);
     const actors = useAtomValue(actorProfilesAtom);
@@ -309,7 +315,7 @@ const HistoryView = () => {
 
         } catch (error) {
             console.error("Batch download halted:", error);
-            alert("生成过程中断，请重试。");
+            showToast("生成过程中断，请重试。", "error");
         } finally {
             setGeneratingStatus("");
             setActiveAudioJobId(null);
@@ -328,8 +334,11 @@ const HistoryView = () => {
                 "flex items-center min-h-14 sm:min-h-16 bg-th-card/70 border-b-[3px] border-th-border sticky top-0 z-20 shadow-[3px_3px_0_var(--voxel-ink)]",
                 "px-6"
             )}>
-                <button onClick={() => setScreen('HOME')} className="flex items-center text-th-accent1 font-bold hover:text-th-accent1/80 transition-colors">
-                    <svg className="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
+                <button
+                    onClick={() => setScreen('HOME')}
+                    className="relative z-10 flex min-h-10 items-center gap-1 border-[3px] border-th-border bg-th-bg2 pl-1.5 pr-2.5 text-xs font-black text-th-fg transition-colors hover:border-th-accent1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                >
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
                     主页
                 </button>
                 <div className="absolute left-1/2 transform -translate-x-1/2 text-lg font-black text-th-fg tracking-tight">历史对局</div>
@@ -345,10 +354,18 @@ const HistoryView = () => {
                         <p className="text-th-muted font-bold animate-pulse">加载历史记录中...</p>
                     </div>
                 ) : archives.length === 0 ? (
-                    <div className="text-center text-th-muted mt-20 flex flex-col items-center">
-                        <div className="mb-4 opacity-50"><McSpriteCanvas name="book" px={5} /></div>
+                    /* 空态占满剩余高度并居中：贴顶 mt-20 会让 675 高的窗口留下一整块空白，且没有任何出路 */
+                    <div className="flex min-h-full flex-col items-center justify-center gap-3 text-center text-th-muted">
+                        <div className="opacity-50"><CampSpriteCanvas name="book" px={5} /></div>
                         <p className="text-lg font-medium">暂无历史记录</p>
-                        <p className="text-xs mt-2">完成一局游戏后会自动保存到这里</p>
+                        <p className="text-xs">完成一局游戏后会自动保存到这里</p>
+                        <button
+                            onClick={() => setScreen('HOME')}
+                            className="mt-2 flex min-h-10 items-center border-[3px] border-[var(--voxel-ink)] px-4 text-xs font-black transition-all hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                            style={{ background: 'var(--voxel-paper)', color: 'var(--voxel-ink)', boxShadow: '3px 3px 0 var(--voxel-ink)' }}
+                        >
+                            回营地开一局
+                        </button>
                     </div>
                 ) : (
                     (() => {
@@ -376,11 +393,11 @@ const HistoryView = () => {
                                     return (
                                         <div
                                             key={game.id}
-                                            onClick={() => {
+                                            onClick={async () => {
                                                 if (isDownloading) return;
-                                                if (!confirmLoadOverLiveGame()) return;
+                                                if (!(await confirmLoadOverLiveGame())) return;
                                                 loadGame(game);
-                                            }}
+                                                }}
                                             className={clsx(
                                                 "bg-th-card/70 rounded-none border-[3px] border-th-border p-4 transition-all duration-300 group relative",
                                                 isDownloading ? "cursor-wait opacity-90" : "cursor-pointer hover:bg-th-card/70 hover:shadow-[4px_4px_0_var(--voxel-ink)] hover:border-th-accent1/20"
@@ -412,7 +429,7 @@ const HistoryView = () => {
                                                         {!isPodcast && <div className="flex items-center gap-1 text-th-muted"><span>公开 {publicLogCount}</span><span>Debug {debugLogCount}</span></div>}
                                                     </div>
                                                     {!isPodcast && (
-                                                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                                                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-bold">
                                                             {game.isMultiplayer && <span className="rounded-none bg-th-accent3/10 px-2 py-1 text-th-accent3">联机模式</span>}
                                                             <span className="rounded-none bg-th-bg2 px-2 py-1 text-th-fg">原因：{resultReason}</span>
                                                             <span className="rounded-none bg-th-god/10 px-2 py-1 text-th-god">存活 {alivePlayers.length}</span>
@@ -424,7 +441,7 @@ const HistoryView = () => {
 
                                                 <div className="flex flex-col items-end gap-2">
                                                     <div className="flex items-center gap-2 flex-wrap justify-end">
-                                                        <span className={clsx("px-2 py-1.5 rounded-none text-[10px] font-bold border shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap",
+                                                        <span className={clsx("px-2 py-1.5 rounded-none text-xs font-bold border shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap",
                                                             isPodcast ? "bg-th-accent1/10 text-th-accent1 border-th-accent1/20" : getWinnerClasses(game.winner)
                                                         )}>
                                                             {isPodcast ? '播客对谈' : getWinnerText(game.winner)}
@@ -432,29 +449,38 @@ const HistoryView = () => {
                                                         {!isPodcast && !isDownloading && (
                                                             <>
                                                                 <button
-                                                                    onClick={(e) => {
+                                                                    onClick={async (e) => {
                                                                         e.stopPropagation();
-                                                                        if (!confirmLoadOverLiveGame()) return;
+                                                                        if (!(await confirmLoadOverLiveGame())) return;
                                                                         loadGame(game);
                                                                     }}
-                                                                                    className="px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-[10px] font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap text-white bg-th-accent2 border-th-accent2/40 hover:bg-th-accent2/80" title="回放本局"
+                                                                                    className="px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-xs font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap text-white bg-th-accent2 border-th-accent2/40 hover:bg-th-accent2/80" title="回放本局"
                                                                 >▶ 回放</button>
-                                                                <button onClick={async (e) => await handleExportArchive(game, e, 'share')} className="px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-[10px] font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap text-th-god border-th-god/20 bg-th-god/10 hover:bg-th-god/20" title="导出分享版复盘 JSON">分享导出</button>
-                                                                <button onClick={async (e) => await handleExportArchive(game, e, 'full')} className="px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-[10px] font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap text-th-accent1 border-th-accent1/20 bg-th-accent1/10 hover:bg-th-accent1/20" title="导出完整复盘 JSON">完整排错导出</button>
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        // 复盘是只读的：不像回放那样清空实时日志，进行中的对局不受影响
+                                                                        openReview(game);
+                                                                    }}
+                                                                    className="px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-xs font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap text-th-fg border-th-border bg-th-card/70 hover:bg-th-bg2"
+                                                                    title="逐轮发言 + 每张牌的模型 + 关键票型"
+                                                                >📋 复盘</button>
+                                                                <button onClick={async (e) => await handleExportArchive(game, e, 'share')} className="px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-xs font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap text-th-god border-th-god/20 bg-th-god/10 hover:bg-th-god/20" title="导出分享版复盘 JSON">分享导出</button>
+                                                                <button onClick={async (e) => await handleExportArchive(game, e, 'full')} className="px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-xs font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap text-th-accent1 border-th-accent1/20 bg-th-accent1/10 hover:bg-th-accent1/20" title="导出完整复盘 JSON">完整排错导出</button>
                                                             </>
                                                         )}
 
                                                         {isDownloading ? (
-                                                            <div className="flex items-center gap-1 bg-th-accent1/10 rounded-none px-2 py-1.5 text-[10px] text-th-accent1 font-bold border border-th-accent1/20 shadow-[3px_3px_0_var(--voxel-ink)]">
+                                                            <div className="flex items-center gap-1 bg-th-accent1/10 rounded-none px-2 py-1.5 text-xs text-th-accent1 font-bold border border-th-accent1/20 shadow-[3px_3px_0_var(--voxel-ink)]">
                                                                 <div className="w-2.5 h-2.5 border-2 border-th-accent1 border-t-transparent rounded-full animate-spin"></div>
                                                                 {downloadProgress[game.id]}%
-                                                                <span className="ml-1 text-[9px] opacity-70 truncate max-w-[80px]">{generatingStatus}</span>
+                                                                <span className="ml-1 text-xs opacity-70 truncate max-w-[80px]">{generatingStatus}</span>
                                                             </div>
                                                         ) : (
                                                             <button
                                                                 onClick={(e) => handleDownloadAudio(game.id, e)}
                                                                 className={clsx(
-                                                                    "px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-[10px] font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50",
+                                                                    "px-2 py-1.5 rounded-none transition-all flex items-center gap-1 border text-xs font-bold shadow-[3px_3px_0_var(--voxel-ink)] whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50",
                                                                     isComplete ? "text-th-god border-th-god/20 bg-th-god/10 hover:bg-th-god/20" :
                                                                         hasPartial ? "text-th-accent1 border-th-accent1/20 bg-th-accent1/10 hover:bg-th-accent1/20" :
                                                                             "text-th-fg border-th-border bg-th-card/70 hover:bg-th-bg2"
@@ -480,7 +506,7 @@ const HistoryView = () => {
                                                                 onClick={(e) => handleDelete(game.id, e)}
                                                                 className={clsx(
                                                                     "w-12 py-1.5 flex items-center justify-center rounded-none transition-all",
-                                                                    deleteConfirmId === game.id ? "bg-th-accent2/10 text-th-accent2 text-[10px] font-bold" : "text-th-border hover:text-th-accent2 hover:bg-th-bg2"
+                                                                    deleteConfirmId === game.id ? "bg-th-accent2/10 text-th-accent2 text-xs font-bold" : "text-th-border hover:text-th-accent2 hover:bg-th-bg2"
                                                                 )}
                                                             >
                                                                 {deleteConfirmId === game.id ? "确认?" : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>}
@@ -493,25 +519,25 @@ const HistoryView = () => {
                                             {!isCollapsed && (
                                                 <div className="mt-3 pt-3 border-t-[3px] border-th-border">
                                                     {isPodcast ? (
-                                                        <div className="text-[10px] font-bold text-th-muted">参与者: 主持人, 1号嘉宾, 2号嘉宾</div>
+                                                        <div className="text-xs font-bold text-th-muted">参与者: 主持人, 1号嘉宾, 2号嘉宾</div>
                                                     ) : (
                                                         <>
                                                             <div className="mb-3 grid gap-2 sm:grid-cols-2">
                                                                 <div className="rounded-none bg-th-god/10 p-2">
-                                                                    <div className="mb-1.5 text-[10px] font-black text-th-god">存活玩家</div>
+                                                                    <div className="mb-1.5 text-xs font-black text-th-god">存活玩家</div>
                                                                     <div className="flex flex-wrap gap-1.5">
-                                                                        {alivePlayers.length ? alivePlayers.map(p => <span key={p.id} className="rounded-none bg-th-card/80 px-2 py-1 text-[10px] font-bold text-th-god">{p.seatNumber}号 {ROLE_INFO[p.role]?.label || p.role}</span>) : <span className="text-[10px] text-th-muted">无</span>}
+                                                                        {alivePlayers.length ? alivePlayers.map(p => <span key={p.id} className="rounded-none bg-th-card/80 px-2 py-1 text-xs font-bold text-th-god">{p.seatNumber}号 {ROLE_INFO[p.role]?.label || p.role}</span>) : <span className="text-xs text-th-muted">无</span>}
                                                                     </div>
                                                                 </div>
                                                                 <div className="rounded-none bg-th-bg2 p-2">
-                                                                    <div className="mb-1.5 text-[10px] font-black text-th-fg">死亡玩家</div>
+                                                                    <div className="mb-1.5 text-xs font-black text-th-fg">死亡玩家</div>
                                                                     <div className="flex flex-wrap gap-1.5">
-                                                                        {deadPlayers.length ? deadPlayers.map(p => <span key={p.id} className="rounded-none bg-th-card/80 px-2 py-1 text-[10px] font-bold text-th-fg">{p.seatNumber}号 {ROLE_INFO[p.role]?.label || p.role}</span>) : <span className="text-[10px] text-th-muted">无</span>}
+                                                                        {deadPlayers.length ? deadPlayers.map(p => <span key={p.id} className="rounded-none bg-th-card/80 px-2 py-1 text-xs font-bold text-th-fg">{p.seatNumber}号 {ROLE_INFO[p.role]?.label || p.role}</span>) : <span className="text-xs text-th-muted">无</span>}
                                                                     </div>
                                                                 </div>
                                                             </div>
                                                             {keyEvents.length > 0 && (
-                                                                <details className="mb-3 rounded-none bg-th-bg2 p-2 text-[11px] text-th-fg" onClick={(e) => e.stopPropagation()}>
+                                                                <details className="mb-3 rounded-none bg-th-bg2 p-2 text-xs text-th-fg" onClick={(e) => e.stopPropagation()}>
                                                                     <summary className="cursor-pointer select-none font-black text-th-fg">关键事件时间线</summary>
                                                                     <div className="mt-2 space-y-1.5">
                                                                         {keyEvents.map((event, index) => <div key={`${game.id}-event-${index}`} className="rounded-none bg-th-card/80 px-2 py-1.5 font-bold">{event}</div>)}
@@ -521,9 +547,9 @@ const HistoryView = () => {
                                                             <div className="flex flex-wrap gap-1.5">
                                                                 {game.players.map(p => (
                                                                     <div key={p.id} className="relative w-8 h-8 rounded-none overflow-hidden ring-2 ring-th-card shadow-[3px_3px_0_var(--voxel-ink)]" title={`${p.seatNumber}号 ${ROLE_INFO[p.role].label} ${p.status}`}>
-                                                                        <PixelAvatarHead seed={p.avatarSeed} dead={p.status !== 'ALIVE'} className="w-full h-full" />
-                                                                        <div className="absolute bottom-0 right-0 bg-th-bg/80 text-[8px] text-th-fg px-1 font-bold">{p.seatNumber}</div>
-                                                                        {p.role === Role.WEREWOLF && <div className="absolute top-0 right-0 text-[8px] bg-th-wolf/80 p-0.5">🐺</div>}
+                                                                        <PixelAvatarHead seed={p.avatarSeed} look={p.look} dead={p.status !== 'ALIVE'} className="w-full h-full" />
+                                                                        <div className="absolute bottom-0 right-0 bg-th-bg/80 text-xs text-th-fg px-1 font-bold">{p.seatNumber}</div>
+                                                                        {p.role === Role.WEREWOLF && <div className="absolute top-0 right-0 text-xs bg-th-wolf/80 p-0.5">🐺</div>}
                                                                         {p.status !== 'ALIVE' && <div className="absolute inset-0 bg-th-dead/45" />}
                                                                     </div>
                                                                 ))}

@@ -9,17 +9,20 @@ export const BlockButton: React.FC<{
   onClick?: () => void;
   active?: boolean;
   title?: string;
+  /** 只有图标没有文字的按钮（如最小化）用它提供可读名称 */
+  ariaLabel?: string;
   disabled?: boolean;
   className?: string;
   /** 自定义底色(默认纸面;active 时火把色) */
   background?: string;
   size?: 'sm' | 'md' | 'lg';
-}> = ({ children, onClick, active, title, disabled, className, background, size = 'md' }) => {
-  const pad = size === 'sm' ? 'px-2 py-1 text-[10px]' : size === 'lg' ? 'px-5 py-3 text-sm' : 'px-3 py-1.5 text-[11px]';
+}> = ({ children, onClick, active, title, ariaLabel, disabled, className, background, size = 'md' }) => {
+  const pad = size === 'sm' ? 'px-2 py-1 text-xs' : size === 'lg' ? 'px-5 py-3 text-sm' : 'px-3 py-1.5 text-xs';
   return (
     <button
       onClick={onClick}
       title={title}
+      aria-label={ariaLabel}
       disabled={disabled}
       className={clsx(
         'border-[3px] font-black shadow-[3px_3px_0_var(--voxel-ink)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-transform',

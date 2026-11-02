@@ -5,6 +5,13 @@ import type { SkillEffectEvent, SkillEffectKind } from './skillEffectModel';
 
 const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
 
+// 减少动态偏好：模块级读取一次；减弱时技能特效保持完整可见但定格（不旋转、不脉冲），
+// 事件时长仍由上层控制移除，信息不丢；Node 测试环境无 matchMedia 时安全回退为 false
+const prefersReducedMotion =
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        : false;
+
 type WorldPoint = { x: number; y: number; z: number };
 
 interface SkillEffectsProps {
@@ -118,6 +125,11 @@ const SkillEffectInstance: React.FC<{
 
     useFrame((_, delta) => {
         if (!groupRef.current) return;
+        if (prefersReducedMotion) {
+            // 定格在静态全显状态：特效本体仍渲染（信息可见），去掉旋转/缩放脉冲循环
+            groupRef.current.scale.setScalar(1);
+            return;
+        }
         elapsedRef.current += delta;
         const progress = Math.min(1, elapsedRef.current / Math.max(0.1, event.durationMs / 1000));
         const pulse = 0.88 + Math.sin(progress * Math.PI) * 0.45;

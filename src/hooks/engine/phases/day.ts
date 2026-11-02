@@ -112,13 +112,22 @@ export const handleDayDiscussion = async (ctx: PhaseHandlerContext) => {
     const {
         players, godState, speakingQueue, turnCount, getRule,
         setGodState, setSpeakingQueue, setPhase, setIsProcessing, addSystemLog, saveSnapshot,
-        generateTurn, getAlivePlayers, isWolfExplodeEnabled,
+        generateTurn, getAlivePlayers, isWolfExplodeEnabled, prefetchTurn,
     } = ctx;
     const [nextId, ...rest] = speakingQueue;
     if (nextId) {
         const player = players.find(p => p.id === nextId);
         if (player && isEffectivelyAlive(player)) {
-            const result = await generateTurn(player);
+            // 发言流水线：下一位的提示词依赖这一条发言，所以不能提前算；
+            // 但它的模型往返可以整段藏进本次播报里 —— 挂点是"日志刚落账、TTS 还没开播"。
+            // 讨论阶段坚持串行语义（每个人都要听见前一位），这里压掉的只是演出时的空等。
+            const upcoming = rest.length > 0 ? players.find(p => p.id === rest[0]) : undefined;
+            const result = await generateTurn(player, undefined, undefined, false, upcoming ? {
+                onSpeechLogCommitted: (log) => prefetchTurn(upcoming, {
+                    phase: GamePhase.DAY_DISCUSSION,
+                    extraLogs: [log],
+                }),
+            } : undefined);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
         }
         setSpeakingQueue(rest);
@@ -443,13 +452,21 @@ export const handleDiscussionRoundTwo = async (ctx: PhaseHandlerContext) => {
     const {
         players, godState, speakingQueue, turnCount,
         setSpeakingQueue, setPhase, setIsProcessing, addSystemLog, saveSnapshot,
-        generateTurn, getAlivePlayers, isWolfExplodeEnabled,
+        generateTurn, getAlivePlayers, isWolfExplodeEnabled, prefetchTurn,
     } = ctx;
     const [nextId, ...rest] = speakingQueue;
     if (nextId) {
         const player = players.find(p => p.id === nextId);
         if (player && isEffectivelyAlive(player)) {
-            const result = await generateTurn(player, "第二轮补充发言，你可以补充观点或选择跳过。");
+            const roundTwoInstruction = "第二轮补充发言，你可以补充观点或选择跳过。";
+            const upcoming = rest.length > 0 ? players.find(p => p.id === rest[0]) : undefined;
+            const result = await generateTurn(player, roundTwoInstruction, undefined, false, upcoming ? {
+                onSpeechLogCommitted: (log) => prefetchTurn(upcoming, {
+                    phase: GamePhase.DISCUSSION_ROUND_TWO,
+                    instruction: roundTwoInstruction,
+                    extraLogs: [log],
+                }),
+            } : undefined);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
         }
         setSpeakingQueue(rest);

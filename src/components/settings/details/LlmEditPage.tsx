@@ -88,13 +88,13 @@ export const LlmEditPage = ({ subPage, setSubPage, providerModelOptions }: LlmEd
                 <span className="text-sm" style={{ color: 'var(--color-muted)' }}>编辑模型</span>
             </div>
 
-            <div className="rounded-none border-[3px] p-5" style={{ background: 'var(--voxel-wood)', borderColor: 'var(--color-border)' }}>
+            <div className="rounded-none border-[3px] p-5" style={{ background: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
                 <SettingsInput label="模型昵称" value={llm.name}
                     onChange={(e) => updateLlm(llm.id, { name: e.target.value })}
                     sub="可修改模型列表中显示的默认昵称" />
 
                 <div className="mb-5">
-                    <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>所属供应商</label>
+                    <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>所属供应商</label>
                     <div className="w-full border rounded-none p-3.5 font-medium flex items-center gap-2 text-sm"
                         style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-fg)' }}>
                         <span className="w-2 h-2 rounded-full" style={{ background: provider?.type === 'gemini' ? 'var(--color-accent2)' : 'var(--color-accent1)' }} />
@@ -103,7 +103,7 @@ export const LlmEditPage = ({ subPage, setSubPage, providerModelOptions }: LlmEd
                 </div>
 
                 <div className="mb-5">
-                    <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>模型 ID</label>
+                    <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 ml-1" style={{ color: 'var(--color-accent1)' }}>模型 ID</label>
                     {provider && (providerModelOptions[provider.id] || provider.models || []).length > 0 && (
                         <PixelSelect
                             value={llm.modelId}
@@ -120,14 +120,14 @@ export const LlmEditPage = ({ subPage, setSubPage, providerModelOptions }: LlmEd
                     <input value={llm.modelId} onChange={e => updateLlm(llm.id, { modelId: e.target.value })}
                         placeholder="gemini-2.5-flash"
                         className={clsx(pixelInputClass, 'font-mono text-xs')} />
-                    <p className="text-[10px] mt-1.5 ml-1" style={{ color: 'var(--color-muted)' }}>可从同步列表选择，也可手动输入</p>
+                    <p className="text-xs mt-1.5 ml-1" style={{ color: 'var(--color-muted)' }}>可从同步列表选择，也可手动输入</p>
                 </div>
 
                 <div className="rounded-none border-[3px] p-4" style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)' }}>
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <div className="text-sm font-bold" style={{ color: 'var(--color-fg)' }}>模型可用性验证</div>
-                            <div className="text-[10px] mt-1" style={{ color: 'var(--color-muted)' }}>发送轻量测试请求，最多等待 15 秒</div>
+                            <div className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>发送轻量测试请求，最多等待 15 秒</div>
                         </div>
                         <ActionButton size="sm" disabled={validatingModelId === llm.id}
                             onClick={() => validateLlmModel(llm)}
@@ -139,13 +139,13 @@ export const LlmEditPage = ({ subPage, setSubPage, providerModelOptions }: LlmEd
                         <div className={clsx('mt-3 rounded-none border-[3px] px-3 py-2 text-xs font-bold leading-relaxed',
                             modelValidationResults[llm.id].ok ? '' : '')}
                             style={{
-                                background: modelValidationResults[llm.id].ok ? 'var(--color-accent1)' : 'var(--color-accent2)',
-                                borderColor: modelValidationResults[llm.id].ok ? 'var(--color-accent1)' : 'var(--color-accent2)',
-                                color: '#fff', opacity: 0.9
+                                background: modelValidationResults[llm.id].ok ? 'var(--color-accent1)' : 'var(--voxel-redstone-deep)',
+                                borderColor: modelValidationResults[llm.id].ok ? 'var(--color-accent1)' : 'var(--voxel-redstone-deep)',
+                                color: modelValidationResults[llm.id].ok ? 'var(--voxel-ink)' : 'var(--voxel-solid-white)'
                             }}>
                             <div>{modelValidationResults[llm.id].message}</div>
                             {modelValidationResults[llm.id].checkedAt && (
-                                <div className="mt-1 text-[10px] opacity-70 font-medium">
+                                <div className="mt-1 text-xs opacity-70 font-medium">
                                     上次验证：{new Date(modelValidationResults[llm.id].checkedAt!).toLocaleTimeString()}
                                 </div>
                             )}

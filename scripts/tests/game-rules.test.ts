@@ -13,7 +13,7 @@ import {
     resolveExileVote,
     shouldOfferWolfExplosion,
 } from '../../src/game/rules';
-import { DEFAULT_GAME_RULES, PlayerStatus, Role, type Player } from '../../src/types';
+import { DEFAULT_GAME_RULES, PlayerStatus, Role, WOLF_ROLES, type Player } from '../../src/types';
 
 const player = (id: number, role: Role, status = PlayerStatus.ALIVE): Player => ({
     id,
@@ -235,4 +235,28 @@ test('nested sheriff rule is the effective source with legacy fallback', () => {
         sheriffEnabled: false,
         rules: undefined as never,
     }), false);
+});
+
+// G-4 契约：仅剩石像鬼时狼方无刀（night.ts 的 wolves.length===0 分支），
+// 石像鬼仍计入狼队，好人只能经放逐获胜，避免死局。若未来要让石像鬼单飞可刀需另作功能开发。
+test('G-4 contract: lone living stone ghost still counts for wolves and checkWinCondition never returns GOOD', () => {
+    // 石像鬼属于 WOLF_ROLES（计入 wolvesCount）
+    assert.equal(WOLF_ROLES.includes(Role.STONE_GHOST), true);
+
+    // 狼队仅剩石像鬼存活：不判 GOOD（屠边条件未满足，对局继续）
+    const loneGhostAlive = checkWinCondition([
+        player(1, Role.STONE_GHOST),
+        player(2, Role.VILLAGER),
+        player(3, Role.SEER),
+    ], { thirdPartyEnabled: false });
+    assert.equal(loneGhostAlive, null);
+
+    // 石像鬼也出局后才满足"所有狼人已出局"→ GOOD
+    const ghostDead = checkWinCondition([
+        player(1, Role.STONE_GHOST, PlayerStatus.DEAD_VOTE),
+        player(2, Role.VILLAGER),
+        player(3, Role.SEER),
+    ], { thirdPartyEnabled: false });
+    assert.equal(ghostDead?.winner, 'GOOD');
+    assert.equal(ghostDead?.reason, 'ALL_WOLVES_DEAD');
 });

@@ -1,11 +1,13 @@
 import { GamePhase, PlayerStatus, Role, ROLE_INFO, isWolfRole } from '../../../types';
+import { pacedWait } from '../pacing';
 import { isEffectivelyAlive, isCrossFactionLoverPair, normalizeMerchantSkillType } from '../../../game/rules';
 import { isLlmAbortedResult, isLlmFailedResult } from '../../engineHelpers';
-import { BUILTIN_LLM_PRESET_ID, builtinGenerate, isBuiltinLlmReady } from '../../../services/builtinLlm';
+import { BUILTIN_LLM_PRESET_ID, builtinGenerate } from '../../../services/builtinLlm';
 import { generateText, parseLLMResponse } from '../../../services/llm';
 import { werewolfSkillInstance } from '../../../services/skills/werewolf/WerewolfSkill';
 import { extractWolfChatTarget } from '../../../utils/wolfChatTarget';
 import { logsAtom } from '../../../atoms';
+import { buildNightPrefetchPlan, nightActionInstruction } from '../nightPlan';
 import type { PhaseHandlerContext } from '../phaseContext';
 
 const werewolfSkill = werewolfSkillInstance;
@@ -16,7 +18,7 @@ const werewolfSkill = werewolfSkillInstance;
 // 函数体自 useGameEngine 的 GOD-loop switch case 原样搬移，语义以 ctx 传递保持不变。
 
 export const handleNightStart = async (ctx: PhaseHandlerContext) => {
-    const { players, godState, turnCount, getRule, setGodState, setPhase, setIsProcessing, addSystemLog, saveSnapshot } = ctx;
+    const { players, godState, turnCount, getRule, setGodState, setPhase, setIsProcessing, addSystemLog, saveSnapshot, prefetchTurn } = ctx;
     setIsProcessing(true);
     try {
         await addSystemLog("天黑请闭眼。");
@@ -42,8 +44,18 @@ export const handleNightStart = async (ctx: PhaseHandlerContext) => {
             discussionRoundTwoTurn: null,
         }));
 
+        // 夜间决策预取：神职的行动互不依赖（女巫除外，她必须先看到刀口；
+        // 狼队除外，他们的夜聊是共识过程），所以在天黑时一次性并发发起，
+        // 各阶段轮到时直接取答案。夜间总等待从"逐个相加"变成"最大并发批次"。
+        // 注意这里用的是重置前的 godState：计划只读 lovers / lastExiledPlayerId / bloodMoonSealed，
+        // 三者在重置中都被保留或已在白天结束时就清空，与重置后再算等价。
+        for (const entry of buildNightPrefetchPlan({ players, godState, turnCount, getRule })) {
+            const actor = players.find(p => p.id === entry.playerId);
+            if (actor) prefetchTurn(actor, { phase: entry.phase, instruction: entry.instruction });
+        }
+
         // Delay before night actions
-        await new Promise(r => setTimeout(r, Math.random() * 2000 + 1500));
+        await pacedWait(Math.random() * 2000 + 1500);
 
         // 首夜丘比特连结（在所有夜间行动之前）
         const cupid = players.find(p => p.role === Role.CUPID && p.status === PlayerStatus.ALIVE);
@@ -77,11 +89,15 @@ export const handleWerewolfAction = async (ctx: PhaseHandlerContext) => {
         const wolves = players.filter(p => p.status === PlayerStatus.ALIVE && isWolfRole(p.role) && p.role !== Role.STONE_GHOST);
 
         if (wolves.length === 0) {
+            // G-4 契约：wolves 已排除石像鬼，故仅剩石像鬼时狼方无刀（石像鬼为侦查位不带刀），
+            // 好人可经放逐获胜，避免死局；若未来要让石像鬼单飞可刀需另作功能开发。
+            // 由 scripts/tests/game-rules.test.ts 的
+            // "G-4 contract: lone living stone ghost still counts for wolves and checkWinCondition never returns GOOD" 锁定。
             // 所有狼人死亡，仍播报睁眼闭眼防止信息泄露
-            await new Promise(r => setTimeout(r, Math.random() * 1500 + 1000));
+            await pacedWait(Math.random() * 1500 + 1000);
             await addSystemLog("狼人请闭眼。");
 
-            await new Promise(r => setTimeout(r, Math.random() * 1500 + 1000));
+            await pacedWait(Math.random() * 1500 + 1000);
 
             const stoneGhostAlive = players.some(player => player.role === Role.STONE_GHOST && isEffectivelyAlive(player));
             if (stoneGhostAlive && getRule('stoneGhostCheckIdentity')) {
@@ -103,7 +119,7 @@ export const handleWerewolfAction = async (ctx: PhaseHandlerContext) => {
                 setGodState(prev => ({ ...prev, wolfExplodeTarget: null }));
             }
             // 无论指刀是否有效，都跳过讨论直接闭眼
-            await new Promise(r => setTimeout(r, Math.random() * 1500 + 1000));
+            await pacedWait(Math.random() * 1500 + 1000);
             await addSystemLog("狼人请闭眼。");
         } else {
             // 正常狼人讨论流程
@@ -203,13 +219,13 @@ export const handleWerewolfAction = async (ctx: PhaseHandlerContext) => {
             }
 
             // 狼队全部发言完毕，进入闭眼与后续夜间阶段
-            await new Promise(r => setTimeout(r, Math.random() * 1500 + 1000));
+            await pacedWait(Math.random() * 1500 + 1000);
             await addSystemLog("狼人请闭眼。");
         }
 
         // 狼人闭眼后，进入石像鬼/预言家阶段
         // Delay before Stone Ghost
-        await new Promise(r => setTimeout(r, Math.random() * 1500 + 1000));
+        await pacedWait(Math.random() * 1500 + 1000);
 
         // 石像鬼行动（在狼人闭眼后、预言家之前）
         const stoneGhostAlive = players.some(player => player.role === Role.STONE_GHOST && isEffectivelyAlive(player));
@@ -236,7 +252,7 @@ export const handleSeerAction = async (ctx: PhaseHandlerContext) => {
         const merchantSkillHolderAlive = godState.merchantSkillType === 'check' && godState.merchantSkillTarget && !godState.merchantSkillUsed && players.some(p => p.id === godState.merchantSkillTarget && isEffectivelyAlive(p));
 
         if (!seer && !merchantSkillHolderAlive) {
-            await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+            await pacedWait(Math.random() * 3000 + 2000);
         }
 
         // 商人发放的查验技能（一次性，优先于预言家行动）
@@ -262,7 +278,8 @@ export const handleSeerAction = async (ctx: PhaseHandlerContext) => {
         // 血月封印：跳过预言家查验
         if (seer && !hasSpoken && !godState.bloodMoonSealed) {
             const targetIds = players.filter(p => isEffectivelyAlive(p) && p.id !== seer.id).map(t => t.id);
-            const seerPrompt = `请选择查验对象。`;
+            // 文案与夜间预取共用 nightActionInstruction：分叉就会白烧一次调用
+            const seerPrompt = nightActionInstruction({ role: Role.SEER, getRule });
             const result = await generateTurn(seer, seerPrompt, [seer.id], true);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
 
@@ -294,7 +311,7 @@ export const handleWitchAction = async (ctx: PhaseHandlerContext) => {
         const witchMerchantHolderAlive = (godState.merchantSkillType === 'poison' || godState.merchantSkillType === 'guard') && godState.merchantSkillTarget && !godState.merchantSkillUsed && players.some(p => p.id === godState.merchantSkillTarget && isEffectivelyAlive(p));
 
         if (!witch && !witchMerchantHolderAlive) {
-            await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+            await pacedWait(Math.random() * 3000 + 2000);
         }
 
         // 商人发放的毒药技能（一次性，优先于女巫行动）
@@ -378,7 +395,7 @@ export const handleWitchAction = async (ctx: PhaseHandlerContext) => {
         }
 
         // Delay before closing eyes
-        await new Promise(r => setTimeout(r, Math.random() * 1500 + 1000));
+        await pacedWait(Math.random() * 1500 + 1000);
 
         await addSystemLog("女巫请闭眼。");
 
@@ -397,7 +414,7 @@ export const handleGuardAction = async (ctx: PhaseHandlerContext) => {
         const guardMerchantHolderAlive = godState.merchantSkillType === 'guard' && godState.merchantSkillTarget && !godState.merchantSkillUsed && players.some(p => p.id === godState.merchantSkillTarget && isEffectivelyAlive(p));
 
         if (!guard && !guardMerchantHolderAlive) {
-            await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+            await pacedWait(Math.random() * 3000 + 2000);
         }
 
         // 商人发放的守护技能（一次性，优先于守卫行动）
@@ -425,9 +442,7 @@ export const handleGuardAction = async (ctx: PhaseHandlerContext) => {
             const validTargets = players
                 .filter(p => isEffectivelyAlive(p) && (!getRule('guardCannotSameTarget') || p.id !== godState.lastGuardProtect))
                 .map(p => p.id);
-            const guardPrompt = getRule('guardCannotSameTarget')
-                ? `请选择今晚守护对象。不能连续两晚守护同一名玩家。`
-                : `请选择今晚守护对象。`;
+            const guardPrompt = nightActionInstruction({ role: Role.GUARD, getRule });
             const result = await generateTurn(guard, guardPrompt, [guard.id], true);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
             const protectTarget = Number(result?.actionTarget);
@@ -460,7 +475,7 @@ export const handleCupidLink = async (ctx: PhaseHandlerContext) => {
         if (cupid && !godState.lovers) {
             // 连结对象不含丘比特自己（与其他夜间行动排除自身的口径一致）
             const targetIds = players.filter(p => isEffectivelyAlive(p) && p.id !== cupid.id).map(t => t.id);
-            const cupidPrompt = `请选择两名玩家连结为情侣。`;
+            const cupidPrompt = nightActionInstruction({ role: Role.CUPID, getRule });
             const result = await generateTurn(cupid, cupidPrompt, [cupid.id], true);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
 
@@ -503,7 +518,7 @@ export const handleCupidLink = async (ctx: PhaseHandlerContext) => {
         }
 
         await addSystemLog("丘比特请闭眼。");
-        await new Promise(r => setTimeout(r, Math.random() * 1500 + 1000));
+        await pacedWait(Math.random() * 1500 + 1000);
         setPhase(GamePhase.WEREWOLF_ACTION);
         saveSnapshot();
         await addSystemLog("狼人请睁眼。", undefined, undefined, GamePhase.WEREWOLF_ACTION);
@@ -513,19 +528,19 @@ export const handleCupidLink = async (ctx: PhaseHandlerContext) => {
 };
 
 export const handleStoneGhostAction = async (ctx: PhaseHandlerContext) => {
-    const { players, godState, logs, phase, turnCount, setIsProcessing, addSystemLog, generateTurn, transitionToNextNightPhase } = ctx;
+    const { players, logs, phase, turnCount, getRule, setIsProcessing, addSystemLog, generateTurn, transitionToNextNightPhase } = ctx;
     setIsProcessing(true);
     try {
         const stoneGhost = players.find(p => p.role === Role.STONE_GHOST && p.status === PlayerStatus.ALIVE);
         const hasSpoken = logs.some(l => l.phase === phase && l.speakerId === stoneGhost?.id && l.turn === turnCount);
 
         if (!stoneGhost) {
-            await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+            await pacedWait(Math.random() * 3000 + 2000);
         }
 
         if (stoneGhost && !hasSpoken) {
             const targetIds = players.filter(p => isEffectivelyAlive(p) && p.id !== stoneGhost.id).map(t => t.id);
-            const sgPrompt = `请选择查验对象，你将得知对方的具体身份。`;
+            const sgPrompt = nightActionInstruction({ role: Role.STONE_GHOST, getRule });
             const result = await generateTurn(stoneGhost, sgPrompt, [stoneGhost.id], true);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
 
@@ -548,7 +563,7 @@ export const handleStoneGhostAction = async (ctx: PhaseHandlerContext) => {
 };
 
 export const handleGravekeeperAction = async (ctx: PhaseHandlerContext) => {
-    const { players, godState, logs, phase, turnCount, aiHostedPlayers, setIsProcessing, addSystemLog, generateTurn, transitionToNextNightPhase } = ctx;
+    const { players, godState, logs, phase, turnCount, getRule, aiHostedPlayers, setIsProcessing, addSystemLog, generateTurn, transitionToNextNightPhase } = ctx;
     setIsProcessing(true);
     try {
         const gravekeeper = players.find(p => p.role === Role.GRAVEKEEPER && p.status === PlayerStatus.ALIVE);
@@ -556,7 +571,7 @@ export const handleGravekeeperAction = async (ctx: PhaseHandlerContext) => {
         const lastExiled = godState.lastExiledPlayerId;
 
         if (!gravekeeper) {
-            await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+            await pacedWait(Math.random() * 3000 + 2000);
         }
 
         if (gravekeeper && !hasSpoken && lastExiled && !godState.bloodMoonSealed) {
@@ -567,7 +582,7 @@ export const handleGravekeeperAction = async (ctx: PhaseHandlerContext) => {
                 // 查验无需人类选择：面板提示"无需操作"，引擎若仍等待人类输入会永久挂起
                 await addSystemLog(`上帝(私聊): ${lastExiled}号的真实身份是 ${roleLabel}`, [gravekeeper.id]);
             } else {
-                const gkPrompt = `查验上一轮被放逐玩家（${lastExiled}号）的身份。`;
+                const gkPrompt = nightActionInstruction({ role: Role.GRAVEKEEPER, getRule, lastExiledPlayerId: lastExiled });
                 const result = await generateTurn(gravekeeper, gkPrompt, [gravekeeper.id], true);
                 if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
                 await addSystemLog(`上帝(私聊): ${lastExiled}号的真实身份是 ${roleLabel}`, [gravekeeper.id]);
@@ -587,19 +602,19 @@ export const handleGravekeeperAction = async (ctx: PhaseHandlerContext) => {
 };
 
 export const handleDemonHunterAction = async (ctx: PhaseHandlerContext) => {
-    const { players, godState, logs, phase, turnCount, setGodState, setIsProcessing, addSystemLog, generateTurn, transitionToNextNightPhase } = ctx;
+    const { players, godState, logs, phase, turnCount, getRule, setGodState, setIsProcessing, addSystemLog, generateTurn, transitionToNextNightPhase } = ctx;
     setIsProcessing(true);
     try {
         const demonHunter = players.find(p => p.role === Role.DEMON_HUNTER && p.status === PlayerStatus.ALIVE);
         const hasSpoken = logs.some(l => l.phase === phase && l.speakerId === demonHunter?.id && l.turn === turnCount);
 
         if (!demonHunter) {
-            await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+            await pacedWait(Math.random() * 3000 + 2000);
         }
 
         if (demonHunter && !hasSpoken && !godState.bloodMoonSealed) {
             const targetIds = players.filter(p => isEffectivelyAlive(p) && p.id !== demonHunter.id).map(t => t.id);
-            const dhPrompt = `选择一名玩家猎杀。若对方是狼人则对方死亡；若对方是好人则你自己死亡。`;
+            const dhPrompt = nightActionInstruction({ role: Role.DEMON_HUNTER, getRule });
             const result = await generateTurn(demonHunter, dhPrompt, [demonHunter.id], true);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
 
@@ -633,19 +648,19 @@ export const handleDemonHunterAction = async (ctx: PhaseHandlerContext) => {
 };
 
 export const handleMerchantAction = async (ctx: PhaseHandlerContext) => {
-    const { players, godState, logs, phase, turnCount, setGodState, setPhase, setIsProcessing, addSystemLog, generateTurn, saveSnapshot } = ctx;
+    const { players, godState, logs, phase, turnCount, getRule, setGodState, setPhase, setIsProcessing, addSystemLog, generateTurn, saveSnapshot } = ctx;
     setIsProcessing(true);
     try {
         const merchant = players.find(p => p.role === Role.MIRACLE_MERCHANT && p.status === PlayerStatus.ALIVE);
         const hasSpoken = logs.some(l => l.phase === phase && l.speakerId === merchant?.id && l.turn === turnCount);
 
         if (!merchant) {
-            await new Promise(r => setTimeout(r, Math.random() * 3000 + 2000));
+            await pacedWait(Math.random() * 3000 + 2000);
         }
 
         if (merchant && !hasSpoken && !godState.bloodMoonSealed) {
             const targetIds = players.filter(p => isEffectivelyAlive(p) && p.id !== merchant.id).map(t => t.id);
-            const merchantPrompt = `选择一名玩家发放技能。`;
+            const merchantPrompt = nightActionInstruction({ role: Role.MIRACLE_MERCHANT, getRule });
             const result = await generateTurn(merchant, merchantPrompt, [merchant.id], true);
             if (isLlmAbortedResult(result) || isLlmFailedResult(result)) return;
 
@@ -682,7 +697,7 @@ export const handleMerchantAction = async (ctx: PhaseHandlerContext) => {
         }
 
         await addSystemLog("奇迹商人请闭眼。");
-        await new Promise(r => setTimeout(r, 2000));
+        await pacedWait(2000);
         setPhase(GamePhase.DAY_ANNOUNCE);
         saveSnapshot();
     } finally {

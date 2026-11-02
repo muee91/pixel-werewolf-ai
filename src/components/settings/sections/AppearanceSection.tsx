@@ -3,8 +3,9 @@ import { clsx } from 'clsx';
 import { uiConfigAtom } from '../../../atoms';
 import { THEMES } from '../../../themes/index';
 import type { EffectLevel } from '../../../themes/types';
-import { OptionCard, PixelSlider, SectionLabel, Toggle } from '../../ui/pixel';
+import { OptionCard, SectionLabel } from '../../ui/pixel';
 import { CardStylePreview, GameLayoutPreview, HomeStylePreview } from '../previews';
+import { SCENE_IDS, SCENES } from '../../game/voxel3d/biomes';
 
 interface AppearanceSectionProps {
     // 3D 视角选项的提示文案依赖「是否已有可开局模型」
@@ -27,16 +28,23 @@ export const AppearanceSection = ({ modelReady }: AppearanceSectionProps) => {
         { id: 'medium', label: '适中', desc: '平衡体验' },
         { id: 'intense', label: '全开', desc: '全部特效' },
     ];
+    // 决策瞬间只给短提示；完整告警走 title，避免选项卡里出现一堵字
+    const viewModeOptions = [
+        { id: '2d' as const, label: '经典 2D', desc: '稳定的方块营地界面，适合低性能设备', hint: undefined as string | undefined },
+        {
+            id: '3d' as const,
+            label: '3D RPG',
+            desc: modelReady ? '环绕镜头进入森林篝火议会' : '环绕镜头进入森林篝火议会（离线大脑也能演）',
+            hint: modelReady ? undefined : '未配置模型时由内置离线大脑发言（决策较简单）；配好模型或下载内置小模型后更像真人',
+        },
+    ];
 
     return (
         <div className="space-y-8">
             <div>
                 <SectionLabel>对局视角</SectionLabel>
                 <div className="grid grid-cols-2 gap-3">
-                    {([
-                        { id: '2d' as const, label: '经典 2D', desc: '稳定的方块营地界面，适合低性能设备' },
-                        { id: '3d' as const, label: '3D RPG', desc: modelReady ? '环绕镜头进入森林篝火议会' : '环绕镜头进入森林篝火议会（未配置可用模型时 AI 将无法发言，建议先在模型区完成配置）' },
-                    ]).map(option => (
+                    {viewModeOptions.map(option => (
                         <OptionCard
                             key={option.id}
                             active={uiConfig.gameViewMode === option.id}
@@ -44,10 +52,34 @@ export const AppearanceSection = ({ modelReady }: AppearanceSectionProps) => {
                         >
                             <div className="p-3 text-center">
                                 <div className="text-sm font-bold" style={{ color: 'var(--color-fg)' }}>{option.label}</div>
-                                <div className="mt-1 text-[10px] leading-tight" style={{ color: 'var(--color-muted)' }}>{option.desc}</div>
+                                <div className="mt-1 text-xs leading-tight" title={option.hint} style={{ color: 'var(--color-muted)' }}>{option.desc}</div>
                             </div>
                         </OptionCard>
                     ))}
+                </div>
+            </div>
+
+            <div>
+                <SectionLabel>3D 场景</SectionLabel>
+                <div className="grid grid-cols-3 gap-3">
+                    {SCENE_IDS.map(id => {
+                        const preset = SCENES[id];
+                        return (
+                            <OptionCard
+                                key={id}
+                                active={(uiConfig.sceneId ?? 'forest-camp') === id}
+                                onClick={() => updateUi('sceneId', id)}
+                            >
+                                <div className="p-3 text-center">
+                                    <div className="text-xs font-bold" style={{ color: 'var(--color-fg)' }}>{preset.label}</div>
+                                    <div className="mt-1 text-xs leading-tight" style={{ color: 'var(--color-muted)' }}>{preset.desc}</div>
+                                </div>
+                            </OptionCard>
+                        );
+                    })}
+                </div>
+                <div className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+                    只作用于 3D 视角。五套场景共用同一份地形与光照系统，切换后进入对局即可看到。
                 </div>
             </div>
 
@@ -60,7 +92,7 @@ export const AppearanceSection = ({ modelReady }: AppearanceSectionProps) => {
                             <div className="p-3 text-center">
                                 <HomeStylePreview id={opt.id} />
                                 <div className="text-xs font-bold mb-1" style={{ color: 'var(--color-fg)' }}>{opt.label}</div>
-                                <div className="text-[10px] leading-tight" style={{ color: 'var(--color-muted)' }}>{opt.desc}</div>
+                                <div className="text-xs leading-tight" style={{ color: 'var(--color-muted)' }}>{opt.desc}</div>
                             </div>
                         </OptionCard>
                     ))}
@@ -92,66 +124,13 @@ export const AppearanceSection = ({ modelReady }: AppearanceSectionProps) => {
                             <div className="p-3 text-center">
                                 <CardStylePreview id={opt.id} />
                                 <div className="text-xs font-bold mb-1" style={{ color: 'var(--color-fg)' }}>{opt.label}</div>
-                                <div className="text-[10px] leading-tight" style={{ color: 'var(--color-muted)' }}>{opt.desc}</div>
+                                <div className="text-xs leading-tight" style={{ color: 'var(--color-muted)' }}>{opt.desc}</div>
                             </div>
                         </OptionCard>
                     ))}
                 </div>
             </div>
             )}
-
-            <div>
-                <SectionLabel>演出音频</SectionLabel>
-                <div className="rounded-none border-[3px] overflow-hidden" style={{ background: 'var(--voxel-wood)', borderColor: 'var(--color-border)' }}>
-                    <div className="divide-y" style={{ borderColor: 'var(--color-border)' }}>
-                        <div className="flex items-center justify-between p-4">
-                            <div>
-                                <span className="text-sm font-bold block" style={{ color: 'var(--color-fg)' }}>环境声</span>
-                                <span className="text-[10px]" style={{ color: 'var(--color-muted)' }}>篝火、风声等场景环境音</span>
-                            </div>
-                            <Toggle value={uiConfig.worldAmbientAudioEnabled} onChange={() => updateUi('worldAmbientAudioEnabled', !uiConfig.worldAmbientAudioEnabled)} />
-                        </div>
-                        <div className="flex items-center justify-between p-4">
-                            <div>
-                                <span className="text-sm font-bold block" style={{ color: 'var(--color-fg)' }}>技能声</span>
-                                <span className="text-[10px]" style={{ color: 'var(--color-muted)' }}>技能发动时的音效提示</span>
-                            </div>
-                            <Toggle value={uiConfig.worldSkillAudioEnabled} onChange={() => updateUi('worldSkillAudioEnabled', !uiConfig.worldSkillAudioEnabled)} />
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div>
-                <SectionLabel>对局音效与音乐</SectionLabel>
-                <div className="rounded-none border-[3px] overflow-hidden" style={{ background: 'var(--voxel-wood)', borderColor: 'var(--color-border)' }}>
-                    <div className="divide-y" style={{ borderColor: 'var(--color-border)' }}>
-                        <div className="flex items-center justify-between p-4">
-                            <div>
-                                <span className="text-sm font-bold block" style={{ color: 'var(--color-fg)' }}>阶段与技能音效</span>
-                                <span className="text-[10px]" style={{ color: 'var(--color-muted)' }}>入夜狼嚎、天亮鸡鸣、投票鼓点、查验/泡药/盾击/上膛</span>
-                            </div>
-                            <Toggle value={uiConfig.gameSfxEnabled} onChange={() => updateUi('gameSfxEnabled', !uiConfig.gameSfxEnabled)} />
-                        </div>
-                        <div className="flex items-center justify-between p-4">
-                            <div>
-                                <span className="text-sm font-bold block" style={{ color: 'var(--color-fg)' }}>对局音乐（BGM）</span>
-                                <span className="text-[10px]" style={{ color: 'var(--color-muted)' }}>白天明亮 / 夜晚压抑双轨和弦，播报时自动压低</span>
-                            </div>
-                            <Toggle value={uiConfig.bgmEnabled} onChange={() => updateUi('bgmEnabled', !uiConfig.bgmEnabled)} />
-                        </div>
-                        <div className="p-4">
-                            <PixelSlider
-                                label="音量"
-                                badge={`${Math.round(uiConfig.gameSfxVolume * 100)}%`}
-                                min={0} max={1} step={0.05}
-                                value={uiConfig.gameSfxVolume}
-                                onChange={e => updateUi('gameSfxVolume', parseFloat(e.target.value))}
-                            />
-                        </div>
-                    </div>
-                </div>
-            </div>
 
             <div>
                 <SectionLabel>特效等级</SectionLabel>
@@ -175,7 +154,7 @@ export const AppearanceSection = ({ modelReady }: AppearanceSectionProps) => {
                                     ))}
                                 </div>
                                 <div className="text-xs font-bold" style={{ color: 'var(--color-fg)' }}>{opt.label}</div>
-                                <div className="text-[10px]" style={{ color: 'var(--color-muted)' }}>{opt.desc}</div>
+                                <div className="text-xs" style={{ color: 'var(--color-muted)' }}>{opt.desc}</div>
                             </div>
                         </OptionCard>
                     ))}

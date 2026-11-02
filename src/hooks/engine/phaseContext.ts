@@ -39,6 +39,21 @@ export type VoteDecision = {
 
 export type TurnResult = LLMResponse | UserInput | typeof LLM_ABORTED_RESULT | ReturnType<typeof createLlmFailedResult> | null;
 
+/** 预取一次决策（不落账、不上屏，只把 LLM 往返提前打出去）。 */
+export interface PrefetchTurnOptions {
+    /** 目标阶段，默认当前阶段；夜间各神职预取时用"未来的阶段"提问 */
+    phase?: GamePhase;
+    /** 行动指令：必须与实际执行时下发的完全一致，否则预取结果不会被命中 */
+    instruction?: string;
+    /** 调用点自己的 logs 还是旧快照时（如发言刚落账就预取下一位），用这个补上差量 */
+    extraLogs?: GameLog[];
+}
+
+export interface GenerateTurnOptions {
+    /** 发言日志刚写入、TTS 还没开始播：这是"预取下一位"最合适的挂点（此前的做法是干等 30 秒） */
+    onSpeechLogCommitted?: (log: GameLog) => void;
+}
+
 export interface PhaseHandlerContext {
     // 本步开始时的阶段（phase 与 phaseAtStart 在本步执行期间恒等）
     phaseAtStart: GamePhase;
@@ -73,7 +88,8 @@ export interface PhaseHandlerContext {
     // 引擎辅助
     addSystemLog: (content: string, visibleTo?: number[], audioOverride?: string, phaseOverride?: GamePhase) => Promise<void>;
     addEventTrace: (content: string, debugData?: Record<string, unknown>) => void;
-    generateTurn: (player: Player, actionInstruction?: string, visibleTo?: number[], skipIsProcessingFlag?: boolean) => Promise<TurnResult>;
+    generateTurn: (player: Player, actionInstruction?: string, visibleTo?: number[], skipIsProcessingFlag?: boolean, options?: GenerateTurnOptions) => Promise<TurnResult>;
+    prefetchTurn: (player: Player, options?: PrefetchTurnOptions) => void;
     getTargetDecision: (player: Player, validTargets: number[], contextPhase: GamePhase, actionInstruction: string, fallbackSummary: string) => Promise<VoteDecision>;
     getAiVote: (player: Player, validTargets: number[]) => Promise<VoteDecision>;
     checkWinCondition: (currentPlayers: Player[]) => WinResult | null;

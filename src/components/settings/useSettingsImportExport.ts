@@ -7,6 +7,7 @@ import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { globalApiConfigAtom, gameConfigAtom, gameArchivesAtom, gameArchivesLoadableAtom, llmPresetsAtom, llmProvidersAtom, ttsPresetsAtom, actorProfilesAtom } from '../../store';
 import type { LLMPreset, LLMProviderConfig } from '../../types';
 import { normalizeGameArchive } from '../../utils/archive';
+import { showToast } from '../../utils/notify';
 
 interface UseSettingsImportExportOptions {
     // 模型配置导入会还原「已同步的模型下拉列表」缓存,该状态由 Shell 持有
@@ -74,10 +75,10 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
                 try {
                     await Share.share({ title: filename, text: '备份已保存，也可分享到其他应用', url: savedFile.uri, dialogTitle: '导出备份' });
                 } catch {
-                    alert(`备份已保存到：${savedFile.uri}`);
+                    showToast(`备份已保存到：${savedFile.uri}`, 'success');
                 }
             } catch (error) {
-                alert(`导出失败：${error}`);
+                showToast(`导出失败：${error}`, 'error');
             }
         } else {
             const blob = new Blob([JSON.stringify(payload, null, 2)], { type: `${mimeType};charset=utf-8` });
@@ -107,7 +108,7 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
         try {
             const importedData = JSON.parse(text);
             if (importedData.exportKind && importedData.exportKind !== expectedKind) {
-                alert(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`);
+                showToast(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`, 'warning');
                 return;
             }
             if (expectedKind === 'FULL_BACKUP') {
@@ -119,13 +120,13 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
                     if (Array.isArray(importedData.gameArchives)) {
                         setArchives(importedData.gameArchives.map(normalizeGameArchive));
                     }
-                    alert('完整应用备份恢复成功！');
+                    showToast('完整应用备份恢复成功！', 'success');
                 } else {
-                    alert('导入失败：文件格式不正确。');
+                    showToast('导入失败：文件格式不正确。', 'error');
                 }
             }
         } catch (error) {
-            alert(`导入失败：无法解析文件。 ${error}`);
+            showToast(`导入失败：无法解析文件。 ${error}`, 'error');
         }
     };
 
@@ -138,7 +139,7 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
                 processImportText(atob(picked.data), 'FULL_BACKUP');
             } catch (error) {
                 if (String(error).includes('canceled')) return;
-                alert(`选择文件失败：${error}`);
+                showToast(`选择文件失败：${error}`, 'error');
             }
         } else {
             fileInputRef.current?.click();
@@ -173,7 +174,7 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
                 processModelConfigImport(atob(picked.data));
             } catch (error) {
                 if (String(error).includes('canceled')) return;
-                alert(`选择文件失败：${error}`);
+                showToast(`选择文件失败：${error}`, 'error');
             }
         } else {
             modelConfigInputRef.current?.click();
@@ -184,11 +185,11 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
         try {
             const importedData = JSON.parse(text);
             if (importedData.exportKind && importedData.exportKind !== 'MODEL_CONFIG') {
-                alert(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`);
+                showToast(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`, 'warning');
                 return;
             }
             if (!Array.isArray(importedData.llmProviders) || !Array.isArray(importedData.llmPresets)) {
-                alert('导入失败：不是有效的模型配置文件。');
+                showToast('导入失败：不是有效的模型配置文件。', 'error');
                 return;
             }
             const validProviders = importedData.llmProviders.filter((item: Partial<LLMProviderConfig>) =>
@@ -198,13 +199,13 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
             const validPresets = importedData.llmPresets.filter((item: Partial<LLMPreset>) =>
                 typeof item.id === 'string' && typeof item.name === 'string' && typeof item.providerId === 'string' && typeof item.modelId === 'string' && providerIds.has(item.providerId)
             ) as LLMPreset[];
-            if (validProviders.length === 0) { alert('导入失败：配置文件里没有可用供应商。'); return; }
+            if (validProviders.length === 0) { showToast('导入失败：配置文件里没有可用供应商。', 'error'); return; }
             setLlmProviders(validProviders);
             setLlmPresets(validPresets);
             setProviderModelOptions(Object.fromEntries(validProviders.map(provider => [provider.id, provider.models || []])));
-            alert(`模型配置导入成功：${validProviders.length} 个供应商，${validPresets.length} 个模型。`);
+            showToast(`模型配置导入成功：${validProviders.length} 个供应商，${validPresets.length} 个模型。`, 'success');
         } catch (error) {
-            alert(`模型配置导入失败：无法解析文件。 ${error}`);
+            showToast(`模型配置导入失败：无法解析文件。 ${error}`, 'error');
         }
     };
 
@@ -234,7 +235,7 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
                 processSettingsImport(atob(picked.data));
             } catch (error) {
                 if (String(error).includes('canceled')) return;
-                alert(`选择文件失败：${error}`);
+                showToast(`选择文件失败：${error}`, 'error');
             }
         } else {
             settingsFileInputRef.current?.click();
@@ -245,7 +246,7 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
         try {
             const importedData = JSON.parse(text);
             if (importedData.exportKind && importedData.exportKind !== 'SETTINGS') {
-                alert(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`);
+                showToast(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`, 'warning');
                 return;
             }
             if (importedData.gameConfig) {
@@ -267,9 +268,9 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
                 });
             }
             if (importedData.globalApiConfig) setConfig(importedData.globalApiConfig);
-            alert('设置配置导入成功！');
+            showToast('设置配置导入成功！', 'success');
         } catch (error) {
-            alert(`导入失败：无法解析文件。 ${error}`);
+            showToast(`导入失败：无法解析文件。 ${error}`, 'error');
         }
     };
 
@@ -299,7 +300,7 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
                 processActorsImport(atob(picked.data));
             } catch (error) {
                 if (String(error).includes('canceled')) return;
-                alert(`选择文件失败：${error}`);
+                showToast(`选择文件失败：${error}`, 'error');
             }
         } else {
             actorsFileInputRef.current?.click();
@@ -310,17 +311,17 @@ export const useSettingsImportExport = ({ setProviderModelOptions }: UseSettings
         try {
             const importedData = JSON.parse(text);
             if (importedData.exportKind && importedData.exportKind !== 'ACTORS') {
-                alert(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`);
+                showToast(`导入失败：这是${importedData.displayName || importedData.exportKind}，请使用对应的导入口。`, 'warning');
                 return;
             }
             if (Array.isArray(importedData.actorProfiles)) {
                 setActors(importedData.actorProfiles);
-                alert('玩家配置导入成功！');
+                showToast('玩家配置导入成功！', 'success');
             } else {
-                alert('导入失败：文件格式不正确。');
+                showToast('导入失败：文件格式不正确。', 'error');
             }
         } catch (error) {
-            alert(`导入失败：无法解析文件。 ${error}`);
+            showToast(`导入失败：无法解析文件。 ${error}`, 'error');
         }
     };
 

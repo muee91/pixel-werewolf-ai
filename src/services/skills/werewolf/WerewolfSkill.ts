@@ -1,5 +1,7 @@
 import { Skill, SkillContext } from '../types';
 import { Player, Role, GamePhase, ROLE_INFO, PlayerStatus, PHASE_LABELS, GameRules, DEFAULT_GAME_RULES, isImmuneToVote, WOLF_ROLES } from '../../../types';
+// 阶段分类与 UI 层共用同一份定义，避免「提示词里算公开、字幕里当私聊」的漂移
+import { DECISION_PHASES_NEEDING_PUBLIC_TRANSCRIPT, isPublicSpeechPhase } from '../../../game/phases';
 
 /** Roles that participate in wolf night chat (excludes STONE_GHOST) */
 const WOLF_CHAT_ROLES: Role[] = [Role.WEREWOLF, Role.WOLF_KING, Role.WHITE_WOLF_KING, Role.BLOOD_MOON_DISCIPLE];
@@ -118,13 +120,6 @@ const buildGameRules = (roles: Role[] = [], rules: GameRules = DEFAULT_GAME_RULE
     return ruleLines.join('\n');
 };
 
-const isPublicSpeechPhase = (phase: GamePhase) => (
-    phase === GamePhase.DAY_DISCUSSION ||
-    phase === GamePhase.SHERIFF_ELECTION ||
-    phase === GamePhase.LAST_WORDS ||
-    phase === GamePhase.DAY_ANNOUNCE ||
-    phase === GamePhase.DISCUSSION_ROUND_TWO
-);
 
 const MAX_PUBLIC_TRANSCRIPT_LOGS = 80;
 
@@ -144,7 +139,7 @@ export class WerewolfSkill implements Skill {
     description = 'Standard Werewolf game logic and role-playing engine.';
 
     async generatePrompts(player: Player, context: SkillContext, instruction?: string): Promise<{ role: string; content: string }[]> {
-        const { phase, roleConfigStr, alivePlayers = [] } = context;
+        const { roleConfigStr, alivePlayers = [] } = context;
 
         // 1. Build Game State Section
         const gameState = this.buildGameState(context, alivePlayers, roleConfigStr);
@@ -224,11 +219,24 @@ ${sheriffInfo}
     private buildHistory(player: Player, context: SkillContext): string {
         const { logs, turnCount, currentTurnLogs = [], phase } = context;
         const publicOnly = isPublicSpeechPhase(phase);
-        const transcriptLogs = publicOnly
-            ? logs
+        const decisionPhase = DECISION_PHASES_NEEDING_PUBLIC_TRANSCRIPT.has(phase);
+        let transcriptLogs;
+        if (publicOnly) {
+            transcriptLogs = logs
                 .filter(log => log.turn <= turnCount && isPublicTranscriptLog(log))
-                .slice(-MAX_PUBLIC_TRANSCRIPT_LOGS)
-            : currentTurnLogs.filter(log => !log.debugType || log.debugType === 'AI_THINKING');
+                .slice(-MAX_PUBLIC_TRANSCRIPT_LOGS);
+        } else if (decisionPhase) {
+            // 决策阶段：当天公开发言（按时间顺序）+ 本回合本阶段的可见日志（狼聊、查验结果等），
+            // 用 id 去重后再截断，保证"投票看得到发言"且不丢掉该座位自己该有的私有上下文。
+            const turnIds = new Set(currentTurnLogs.map(log => log.id));
+            transcriptLogs = logs
+                .filter(log => log.turn <= turnCount && (
+                    isPublicTranscriptLog(log) || (turnIds.has(log.id) && (!log.debugType || log.debugType === 'AI_THINKING'))
+                ))
+                .slice(-MAX_PUBLIC_TRANSCRIPT_LOGS);
+        } else {
+            transcriptLogs = currentTurnLogs.filter(log => !log.debugType || log.debugType === 'AI_THINKING');
+        }
 
         // 1. Current Turn Transcript (Most important)
         const currentTranscript = transcriptLogs.length > 0
